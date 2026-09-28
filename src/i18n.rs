@@ -258,6 +258,14 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Swap A and B" => "Scambia A e B",
         "Close the comparison" => "Chiudi il confronto",
         "Comparison" => "Confronto",
+        "Up axis" => "Asse verticale",
+        "Z up" => "Z in alto",
+        "Y up" => "Y in alto",
+        "Z: Blender, 3ds Max, Unreal. Y: Maya, Unity, Houdini, ZBrush, Substance. Only names, colors and numbers change; the model looks the same." => {
+            "Z: Blender, 3ds Max, Unreal. Y: Maya, Unity, Houdini, ZBrush, Substance. Cambiano solo nomi, colori e numeri; il modello resta uguale."
+        }
+        "Y, height" => "Y, altezza",
+        "Z, depth" => "Z, profondità",
         "Export Turntable" => "Esporta turntable",
         "Export Turntable…" => "Esporta turntable…",
         "Format" => "Formato",

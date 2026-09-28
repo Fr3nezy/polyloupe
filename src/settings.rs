@@ -114,6 +114,8 @@ pub struct Settings {
     pub view_transform: ViewTransform,
 
     pub show_sidebar: bool,
+    /// Which axis the interface calls up (display only, see `axes`).
+    pub up_axis: crate::axes::UpAxis,
     /// Master switch, like Blender's overlays toggle.
     pub show_overlays: bool,
     pub show_grid: bool,
@@ -181,6 +183,7 @@ impl Default for Settings {
             env_blur: 0.4,
             view_transform: ViewTransform::AgX,
             show_sidebar: false,
+            up_axis: crate::axes::UpAxis::Z,
             show_overlays: true,
             show_grid: true,
             show_axes: true,

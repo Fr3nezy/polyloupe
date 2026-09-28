@@ -58,6 +58,7 @@ struct GlobalsUniform {
     markers: [u32; 4],
     section: [f32; 4],
     normals: [f32; 4],
+    display: [f32; 4],
 }
 
 /// One mesh analysis marker (see `qa`): an edge from `a` to `b`, or a vertex at `a`.
@@ -1013,6 +1014,7 @@ impl Renderer {
             markers: [s.show_non_manifold as u32, s.show_open_edges as u32, s.show_overlapping as u32, 0],
             section: input.section.unwrap_or([0.0; 4]),
             normals: [if s.show_normals { input.normal_length } else { 0.0 }, s.show_face_orientation as u32 as f32, 0.0, 0.0],
+            display: [(s.up_axis == crate::axes::UpAxis::Y) as u32 as f32, 0.0, 0.0, 0.0],
         };
         self.queue.write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
 

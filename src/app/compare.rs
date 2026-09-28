@@ -310,7 +310,8 @@ impl ViewerApp {
         for (label, va, vb) in rows {
             lines.push((tr(label).to_string(), value(va), value(vb), delta(va, vb)));
         }
-        for (k, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
+        for (d, axis) in crate::axes::NAMES.into_iter().enumerate() {
+            let k = self.settings.up_axis.internal(d).0;
             lines.push((trf("Size {axis}", &[("axis", &axis)]), fmt_len(sa[k]), fmt_len(sb[k]), String::new()));
         }
         // Fixed columns: label, A and B right-aligned, delta right-aligned at the edge.

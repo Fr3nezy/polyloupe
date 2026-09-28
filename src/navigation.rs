@@ -39,6 +39,17 @@ pub struct DragInput {
 }
 
 impl Navigation {
+    /// The up axis people coming from this app expect, when there's one clear answer.
+    pub fn suggested_up(self) -> Option<crate::axes::UpAxis> {
+        use crate::axes::UpAxis;
+        match self {
+            Navigation::Blender | Navigation::Max => Some(UpAxis::Z),
+            Navigation::Maya | Navigation::ZBrush => Some(UpAxis::Y),
+            // Unity is Y up and Unreal Z up; CAD tools disagree too.
+            Navigation::GameEngine | Navigation::Cad => None,
+        }
+    }
+
     pub const ALL: [Navigation; 6] = [
         Navigation::Blender,
         Navigation::Maya,

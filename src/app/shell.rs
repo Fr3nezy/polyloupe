@@ -600,7 +600,9 @@ impl ViewerApp {
             let (Some(sa), Some(sb)) = (project(a), project(b)) else { continue };
             // Legs along X, then Y, then Z, like walking the bounding box of the segment.
             let corners = [a, Vec3::new(b.x, a.y, a.z), Vec3::new(b.x, b.y, a.z), b];
-            for (k, color) in [theme::AXIS_X, theme::AXIS_Y, theme::AXIS_Z].into_iter().enumerate() {
+            let up = self.settings.up_axis;
+            for k in 0..3 {
+                let color = crate::axes::color(up.display(k).0);
                 if (corners[k + 1] - corners[k]).length() < 1e-6 {
                     continue;
                 }
@@ -613,11 +615,12 @@ impl ViewerApp {
             dot(sa);
             dot(sb);
 
-            let d = b - a;
+            let d = up.to_display(b - a);
             let mut job = LayoutJob::default();
             job.append(&fmt_len(d.length()), 0.0, TextFormat { font_id: theme::medium(14.0), color: theme::TEXT, ..Default::default() });
             job.append("\n", 0.0, TextFormat::default());
-            for (k, (axis, color)) in [("X", theme::AXIS_X), ("Y", theme::AXIS_Y), ("Z", theme::AXIS_Z)].into_iter().enumerate() {
+            for (k, axis) in crate::axes::NAMES.into_iter().enumerate() {
+                let color = crate::axes::color(k);
                 let sep = if k > 0 { "  " } else { "" };
                 job.append(&format!("{sep}{axis} "), 0.0, TextFormat { font_id: theme::mono(10.5), color, ..Default::default() });
                 job.append(&fmt_len(d[k].abs()), 0.0, TextFormat { font_id: theme::mono(10.5), color: theme::TEXT_DIM, ..Default::default() });
@@ -719,17 +722,29 @@ impl ViewerApp {
                     icons::section(ui.painter(), r, theme::SECTION);
                     ui.label(theme::caps(tr("Section"), 11.0, theme::TEXT_DIM));
                     toolbar_separator(ui);
-                    for (axis, label) in [(0, "X"), (1, "Y"), (2, "Z")] {
+                    // Buttons name display axes; the plane itself stays on the world axis.
+                    let up = self.settings.up_axis;
+                    for (d, label) in crate::axes::NAMES.into_iter().enumerate() {
+                        let axis = up.internal(d).0;
                         if text_button(ui, label, s.axis == axis).on_hover_text(tr("Cut across this axis")).clicked() {
                             s.axis = axis;
                         }
                     }
                     toolbar_separator(ui);
                     ui.spacing_mut().slider_width = 180.0;
-                    ui.add(egui::Slider::new(&mut s.t, 0.0..=1.0).show_value(false))
-                        .on_hover_text(tr("Drag in the view with the Section tool to move it"));
+                    // A display axis pointing the other way (Y up shows world -Y as Z) keeps the
+                    // slider growing with the displayed coordinate.
+                    let sign = up.display(s.axis).1;
+                    let mut shown_t = if sign < 0.0 { 1.0 - s.t } else { s.t };
+                    if ui
+                        .add(egui::Slider::new(&mut shown_t, 0.0..=1.0).show_value(false))
+                        .on_hover_text(tr("Drag in the view with the Section tool to move it"))
+                        .changed()
+                    {
+                        s.t = if sign < 0.0 { 1.0 - shown_t } else { shown_t };
+                    }
                     let extent = b.max[s.axis] - b.min[s.axis];
-                    let at = b.min[s.axis] + extent * s.t;
+                    let at = sign * (b.min[s.axis] + extent * s.t);
                     // Float noise around the origin reads as "0,01 µm": show a clean zero.
                     let at = if at.abs() < extent * 1e-4 { 0.0 } else { at };
                     let (r, _) = ui.allocate_exact_size(vec2(64.0, theme::TOOLBAR_HEIGHT), Sense::hover());
@@ -956,9 +971,13 @@ impl ViewerApp {
         };
         widgets::section(ui, "Dimensions");
         table(ui, |t| {
-            t.row("X, width", &fmt_len(size.x));
-            t.row("Y, depth", &fmt_len(size.y));
-            t.row("Z, height", &fmt_len(size.z));
+            let labels = match self.settings.up_axis {
+                crate::axes::UpAxis::Z => ["X, width", "Y, depth", "Z, height"],
+                crate::axes::UpAxis::Y => ["X, width", "Y, height", "Z, depth"],
+            };
+            for (d, label) in labels.into_iter().enumerate() {
+                t.row(label, &fmt_len(size[self.settings.up_axis.internal(d).0]));
+            }
         });
         ui.add_space(12.0);
 
