@@ -231,6 +231,25 @@ pub fn move_arrows(p: &Painter, rect: Rect, color: Color32) {
 }
 
 /// Zoom tool: magnifier with a plus.
+/// A/B side by side: two frames.
+pub fn compare_side(p: &Painter, rect: Rect, color: Color32) {
+    let g = grid(rect, 18.0);
+    let s = stroke_for(rect, 18.0, 1.4, color);
+    for x in [2.0, 10.0] {
+        p.add(Shape::closed_line(vec![g(x, 4.0), g(x + 6.0, 4.0), g(x + 6.0, 14.0), g(x, 14.0)], s));
+    }
+    p.add(Shape::convex_polygon(vec![g(10.0, 4.0), g(16.0, 4.0), g(16.0, 14.0), g(10.0, 14.0)], color.gamma_multiply(0.45), Stroke::NONE));
+}
+
+/// A/B split: one frame with a divider, one side filled.
+pub fn compare_split(p: &Painter, rect: Rect, color: Color32) {
+    let g = grid(rect, 18.0);
+    let s = stroke_for(rect, 18.0, 1.4, color);
+    p.add(Shape::convex_polygon(vec![g(9.0, 4.0), g(16.0, 4.0), g(16.0, 14.0), g(9.0, 14.0)], color.gamma_multiply(0.45), Stroke::NONE));
+    p.add(Shape::closed_line(vec![g(2.0, 4.0), g(16.0, 4.0), g(16.0, 14.0), g(2.0, 14.0)], s));
+    p.line_segment([g(9.0, 2.0), g(9.0, 16.0)], s);
+}
+
 /// Cross-section: a box cut in half, the cut face filled.
 pub fn section(p: &Painter, rect: Rect, color: Color32) {
     let g = grid(rect, 18.0);

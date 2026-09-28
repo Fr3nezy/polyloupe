@@ -13,6 +13,7 @@ use eframe::egui::{
 use glam::Vec3;
 use eframe::egui_wgpu;
 
+mod compare;
 mod shell;
 
 use crate::anim::AnimPlayer;
@@ -214,6 +215,11 @@ pub struct ViewerApp {
     measure_hover_px: Option<[u32; 2]>,
     /// Cross-section, when on.
     section: Option<Section>,
+    /// Second model for the A/B comparison, and one being loaded.
+    compare: Option<compare::Compare>,
+    compare_loading: Option<Loading>,
+    /// Last environment loaded, so a comparison model can light with it too.
+    env_image: Option<EnvImage>,
     env_loaded: Option<Environment>,
     env_loading: Option<(Environment, Receiver<Result<EnvImage, String>>)>,
     capture: Option<CaptureState>,
@@ -286,6 +292,9 @@ impl ViewerApp {
             measure_hover: None,
             measure_hover_px: None,
             section: None,
+            compare: None,
+            compare_loading: None,
+            env_image: None,
             env_loaded: None,
             env_loading: None,
             capture: launch.capture.map(|opts| CaptureState { opts, frames: 0, requested: false }),
@@ -608,46 +617,17 @@ impl ViewerApp {
         }
         let file_name = file_name(&loading.path);
         self.camera.reset(&scene.bounds);
-        let objects: Vec<ObjectMeta> = scene
-            .meshes
-            .iter()
-            .map(|m| ObjectMeta {
-                name: m.name.clone(),
-                triangles: m.triangle_count(),
-                vertices: m.positions.len(),
-                bounds: m.bounds.transformed(&m.transform),
-                material: m.material.min(scene.materials.len() - 1),
-            })
-            .collect();
-        self.selection.reset(objects.len());
+        let info = scene_info(&scene, &loading.path, loading.started.elapsed());
+        let n = info.objects.len();
+        self.selection.reset(n);
         self.measures.clear();
         self.cancel_measure();
         self.snap.clear();
         self.section = None;
-        self.visible = vec![true; objects.len()];
-        self.pass_override = vec![None; objects.len()];
-        let missing: Vec<String> = scene
-            .images
-            .iter()
-            .filter_map(|i| i.name.strip_suffix(loader::MISSING_SUFFIX).map(str::to_string))
-            .collect();
-        let missing_count = missing.len();
-        self.info = Some(SceneInfo {
-            path: loading.path.clone(),
-            missing,
-            file_name: file_name.clone(),
-            materials: scene
-                .materials
-                .iter()
-                .map(|m| MaterialMeta { name: m.name.clone(), maps: m.maps() })
-                .collect(),
-            images: scene.images.iter().map(|i| (i.name.clone(), i.width, i.height)).collect(),
-            objects,
-            vertices: scene.source_vertex_count,
-            triangles: scene.triangle_count(),
-            load_time: loading.started.elapsed(),
-            qa: None,
-        });
+        self.visible = vec![true; n];
+        self.pass_override = vec![None; n];
+        let missing_count = info.missing.len();
+        self.info = Some(info);
         self.settings.push_recent(&loading.path.to_string_lossy());
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{file_name} — {APP_NAME}")));
         // Missing textures get a banner with a fix; other warnings a plain toast.
@@ -662,19 +642,7 @@ impl ViewerApp {
         }
         // The CPU copy goes to the mesh analysis, then is dropped: the GPU holds everything
         // the viewport needs. A newer load replaces `qa_rx`, so stale results are ignored.
-        let (tx, rx) = channel();
-        self.qa_rx = Some(rx);
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let started = Instant::now();
-            let (report, marks) = qa::analyze(&scene.meshes);
-            log::info!("mesh analysis in {:?}: {report:?}", started.elapsed());
-            let instances = scene.meshes.iter().zip(&marks).map(|(m, k)| render::marker_instances(m, k)).collect();
-            let snap = scene.meshes.into_iter().map(|m| snap::SnapMesh::new(m.transform, m.positions)).collect();
-            if tx.send((report, instances, snap)).is_ok() {
-                ctx.request_repaint();
-            }
-        });
+        self.qa_rx = Some(spawn_analysis(scene, ctx));
     }
 
     /// Moves a measurement point onto the nearest vertex of the object under the cursor,
@@ -770,9 +738,13 @@ impl ViewerApp {
                         if let Some(r) = &self.renderer {
                             r.set_environment(&image);
                         }
+                        if let Some(c) = &self.compare {
+                            c.renderer.set_environment(&image);
+                        }
                         if let Environment::File(path) = &env {
                             self.thumbs.add_environment(ctx, path, &image);
                         }
+                        self.env_image = Some(image);
                         self.env_loaded = Some(env);
                     }
                     Err(e) => {
@@ -838,8 +810,11 @@ impl ViewerApp {
                 }
             }
             self.anim_dirty = false;
-        }
-        if p.playing {
+            if p.playing {
+                ctx.request_repaint();
+            }
+            self.sync_compare_animation();
+        } else if p.playing {
             ctx.request_repaint();
         }
     }
@@ -1013,6 +988,9 @@ impl ViewerApp {
             self.frame_selected();
         }
 
+        if self.info.is_some() && pressed(Modifiers::COMMAND | Modifiers::SHIFT, Key::O) {
+            self.compare_dialog(ctx);
+        }
         if pressed(Modifiers::COMMAND, Key::O) {
             self.open_dialog(ctx);
         }
@@ -1263,9 +1241,11 @@ impl ViewerApp {
             if self.camera.update(dt) {
                 ctx.request_repaint();
             }
-            self.render_viewport(ui, frame, rect);
-            self.draw_measures(ui, rect);
-            self.draw_section(ui, rect);
+            let rect_a = self.compare_rect_a(rect);
+            self.render_viewport(ui, frame, rect_a);
+            self.render_compare(ui, frame, rect);
+            self.draw_measures(ui, rect_a);
+            self.draw_section(ui, rect_a);
 
             let overlays = self.settings.show_overlays;
             if overlays {
@@ -1287,6 +1267,7 @@ impl ViewerApp {
             }
             self.viewport_toolbar(&ctx, rect);
             self.section_bar(&ctx, rect);
+            self.compare_controls(ui, rect);
             if let Some(loading) = &self.loading {
                 shell::loading_overlay(ui, rect, &file_name(&loading.path));
                 ctx.request_repaint_after(Duration::from_millis(50));
@@ -1295,12 +1276,27 @@ impl ViewerApp {
 
         let hovering_files = ctx.input(|i| !i.raw.hovered_files.is_empty());
         if hovering_files {
-            shell::drop_overlay(ui, rect);
+            shell::drop_overlay(ui, rect, self.info.is_some());
         }
+    }
+
+    /// Settings as the renderer should see them: the overlays switch hides every overlay.
+    fn effective_settings(&self) -> Settings {
+        let mut effective = self.settings.clone();
+        if !effective.show_overlays {
+            effective.show_grid = false;
+            effective.show_wire_overlay = false;
+            effective.show_outline = false;
+            effective.show_non_manifold = false;
+            effective.show_open_edges = false;
+            effective.show_overlapping = false;
+        }
+        effective
     }
 
     fn render_viewport(&mut self, ui: &mut Ui, frame: &mut eframe::Frame, rect: Rect) {
         let section = self.section_plane();
+        let effective = self.effective_settings();
         let (Some(renderer), Some(rs)) = (&mut self.renderer, frame.wgpu_render_state()) else {
             ui.painter().rect_filled(rect, 0.0, theme::VIEWPORT);
             return;
@@ -1321,15 +1317,6 @@ impl ViewerApp {
         renderer.set_pass_overrides(&overrides);
         renderer.set_visibility(&self.visible);
 
-        let mut effective = self.settings.clone();
-        if !effective.show_overlays {
-            effective.show_grid = false;
-            effective.show_wire_overlay = false;
-            effective.show_outline = false;
-            effective.show_non_manifold = false;
-            effective.show_open_edges = false;
-            effective.show_overlapping = false;
-        }
         let pick = self.pending_pick.take();
         let input = FrameInput {
             view: self.camera.view_matrix(),
@@ -1384,14 +1371,20 @@ impl ViewerApp {
 
     fn drive_capture(&mut self, ctx: &egui::Context) {
         let mut pending_channel = None;
+        let mut pending_compare = None;
         let Some(cap) = &mut self.capture else { return };
         ctx.request_repaint();
         if self.loading.is_some() || self.env_loading.is_some() {
             return;
         }
-        // Hold the shot until the mesh analysis is in, so its markers are in the picture.
-        if cap.frames > 2 && self.qa_rx.is_some() {
+        // Hold the shot until the mesh analysis (and model B) are in.
+        if cap.frames > 2 && (self.qa_rx.is_some() || self.compare_loading.is_some()) {
             return;
+        }
+        if cap.opts.compare_split {
+            if let Some(c) = &mut self.compare {
+                c.mode = compare::CompareMode::Split;
+            }
         }
         cap.frames += 1;
         if let (4, Some([_, b])) = (cap.frames, cap.opts.measure) {
@@ -1422,6 +1415,9 @@ impl ViewerApp {
             }
             if cap.opts.pie {
                 self.pie.open(ctx.content_rect().center(), ctx.input(|i| i.time));
+            }
+            if let Some(path) = cap.opts.compare.clone() {
+                pending_compare = Some(path);
             }
             if let Some((axis, t, flip)) = cap.opts.section {
                 self.section = Some(Section { axis, t, flip });
@@ -1483,6 +1479,9 @@ impl ViewerApp {
         if let Some(pass) = pending_channel {
             self.apply_channel(ChannelAction::Show(pass));
         }
+        if let Some(path) = pending_compare {
+            self.open_compare(path, ctx);
+        }
     }
 }
 
@@ -1496,6 +1495,7 @@ impl eframe::App for ViewerApp {
         }
         self.poll_loading(&ctx);
         self.poll_qa();
+        self.poll_compare(&ctx, frame);
         self.update_environment(&ctx);
 
         let dropped: Vec<PathBuf> = ctx.input(|i| {
@@ -1507,7 +1507,12 @@ impl eframe::App for ViewerApp {
                 .collect()
         });
         if let Some(path) = dropped.into_iter().next() {
-            self.open(path, &ctx);
+            let pointer = ctx.input(|i| i.pointer.hover_pos());
+            if self.info.is_some() && pointer.is_some_and(|p| p.x > self.viewport_rect.center().x) {
+                self.open_compare(path, &ctx);
+            } else {
+                self.open(path, &ctx);
+            }
         }
 
         if self.applied_vsync != Some(self.settings.vsync) {
@@ -1597,6 +1602,53 @@ fn missing_prefix() -> String {
 }
 
 /// Adaptive grid: a new decade of lines fades in as you zoom. Returns (cell, fade, plane axis).
+/// What the Info tab and the rest of the UI keep of a loaded scene.
+fn scene_info(scene: &Scene, path: &Path, load_time: Duration) -> SceneInfo {
+    SceneInfo {
+        path: path.to_path_buf(),
+        missing: scene
+            .images
+            .iter()
+            .filter_map(|i| i.name.strip_suffix(loader::MISSING_SUFFIX).map(str::to_string))
+            .collect(),
+        file_name: file_name(path),
+        materials: scene.materials.iter().map(|m| MaterialMeta { name: m.name.clone(), maps: m.maps() }).collect(),
+        images: scene.images.iter().map(|i| (i.name.clone(), i.width, i.height)).collect(),
+        objects: scene
+            .meshes
+            .iter()
+            .map(|m| ObjectMeta {
+                name: m.name.clone(),
+                triangles: m.triangle_count(),
+                vertices: m.positions.len(),
+                bounds: m.bounds.transformed(&m.transform),
+                material: m.material.min(scene.materials.len() - 1),
+            })
+            .collect(),
+        vertices: scene.source_vertex_count,
+        triangles: scene.triangle_count(),
+        load_time,
+        qa: None,
+    }
+}
+
+/// Runs the mesh analysis on a worker thread; the scene's CPU copy is dropped there.
+fn spawn_analysis(scene: Scene, ctx: &egui::Context) -> Receiver<QaResult> {
+    let (tx, rx) = channel();
+    let ctx = ctx.clone();
+    std::thread::spawn(move || {
+        let started = Instant::now();
+        let (report, marks) = qa::analyze(&scene.meshes);
+        log::info!("mesh analysis in {:?}: {report:?}", started.elapsed());
+        let instances = scene.meshes.iter().zip(&marks).map(|(m, k)| render::marker_instances(m, k)).collect();
+        let snap = scene.meshes.into_iter().map(|m| snap::SnapMesh::new(m.transform, m.positions)).collect();
+        if tx.send((report, instances, snap)).is_ok() {
+            ctx.request_repaint();
+        }
+    });
+    rx
+}
+
 fn grid_params(camera: &Camera) -> (f32, f32, u32) {
     let level = camera.view.distance.max(1e-6).log10() - GRID_LEVEL_OFFSET;
     let axis = match (camera.ortho, camera.axis_view) {

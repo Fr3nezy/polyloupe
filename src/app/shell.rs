@@ -149,6 +149,12 @@ impl ViewerApp {
                     ui.close();
                     self.open_dialog(&ctx);
                 }
+                ui.add_enabled_ui(self.info.is_some(), |ui| {
+                    if ui.add(egui::Button::new(tr("Compare with…")).shortcut_text("Ctrl Shift O")).clicked() {
+                        ui.close();
+                        self.compare_dialog(&ctx);
+                    }
+                });
                 let recent = self.settings.recent_files.clone();
                 ui.add_enabled_ui(!recent.is_empty(), |ui| {
                     ui.menu_button(tr("Open Recent"), |ui| {
@@ -327,6 +333,7 @@ impl ViewerApp {
         let capture_popover = self.capture.as_ref().and_then(|c| c.opts.popover.clone());
         let mut frame = false;
         let mut shading_panel = false;
+        let mut compare_action = super::compare::CompareAction::None;
         egui::Area::new(Id::new("viewport_toolbar"))
             .order(Order::Middle)
             .fixed_pos(pos2(viewport.center().x, viewport.top() + 12.0))
@@ -397,6 +404,10 @@ impl ViewerApp {
                             self.inspector_tab = InspectorTab::Materials;
                         }
                     }
+                    if self.info.is_some() {
+                        toolbar_separator(ui);
+                        compare_action = self.compare_toolbar(ui);
+                    }
                     toolbar_separator(ui);
                     let projection = if self.camera.ortho { "Orthographic" } else { "Perspective" };
                     if text_button(ui, projection, false).on_hover_text(tr("Perspective / Orthographic (5)")).clicked() {
@@ -418,6 +429,7 @@ impl ViewerApp {
         if shading_panel {
             self.toggle_inspector_tab(InspectorTab::Shading);
         }
+        self.apply_compare_action(compare_action, ctx);
         if frame {
             self.frame_all();
         }
@@ -842,6 +854,7 @@ impl ViewerApp {
             stat_card(ui, &thousands(info.triangles), "Triangles", w);
         });
         ui.add_space(12.0);
+        self.compare_table(ui);
 
         widgets::section(ui, "Mesh Check");
         match &info.qa {
@@ -1374,9 +1387,24 @@ pub(super) fn loading_overlay(ui: &mut Ui, viewport: Rect, name: &str) {
     });
 }
 
-pub(super) fn drop_overlay(ui: &Ui, viewport: Rect) {
+/// With a model open, the right half takes the drop as model B for an A/B comparison.
+pub(super) fn drop_overlay(ui: &Ui, viewport: Rect, has_model: bool) {
     let painter = ui.painter();
     painter.rect_filled(viewport, 0.0, Color32::from_black_alpha(150));
-    dashed_rect(painter, viewport.shrink(16.0), theme::TEXT);
-    painter.text(viewport.center(), Align2::CENTER_CENTER, tr("Drop to open"), theme::bold(22.0), theme::TEXT);
+    if !has_model {
+        dashed_rect(painter, viewport.shrink(16.0), theme::TEXT);
+        painter.text(viewport.center(), Align2::CENTER_CENTER, tr("Drop to open"), theme::bold(22.0), theme::TEXT);
+        return;
+    }
+    let pointer = ui.ctx().input(|i| i.pointer.hover_pos());
+    let (left, right) = viewport.split_left_right_at_x(viewport.center().x);
+    for (zone, title, sub) in [(left, "Drop to open", "Replaces the model"), (right, "Drop to compare", "Opens it as B, next to A")] {
+        let hot = pointer.is_some_and(|p| zone.contains(p));
+        if hot {
+            painter.rect_filled(zone.shrink(16.0), CornerRadius::same(theme::RADIUS), Color32::from_white_alpha(14));
+        }
+        dashed_rect(painter, zone.shrink(16.0), if hot { theme::TEXT } else { theme::TEXT_DIM });
+        painter.text(zone.center() - vec2(0.0, 12.0), Align2::CENTER_CENTER, tr(title), theme::bold(22.0), theme::TEXT);
+        painter.text(zone.center() + vec2(0.0, 16.0), Align2::CENTER_CENTER, tr(sub), FontId::proportional(13.0), theme::TEXT_DIM);
+    }
 }
