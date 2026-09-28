@@ -17,6 +17,9 @@ pub struct UvMesh {
     pub flipped: Vec<[u32; 3]>,
     /// Triangles with a corner outside the 0..1 square.
     pub outside: usize,
+    /// Total surface in square meters (world space) and in UV space, for texel density.
+    pub area_world: f64,
+    pub area_uv: f64,
     pub material: usize,
 }
 
@@ -34,8 +37,12 @@ pub fn extract(meshes: &[Mesh], materials: &[Material], images: &[Image]) -> UvD
             let uvs = m.uvs.clone()?;
             let mut flipped = Vec::new();
             let mut outside = 0;
+            let (mut area_world, mut area_uv) = (0.0f64, 0.0f64);
             for t in m.indices.chunks_exact(3) {
                 let [a, b, c] = [t[0], t[1], t[2]].map(|i| uvs[i as usize]);
+                let [p, q, r] = [t[0], t[1], t[2]].map(|i| m.transform.transform_point3(glam::Vec3::from(m.positions[i as usize])));
+                area_world += (q - p).cross(r - p).length() as f64 * 0.5;
+                area_uv += signed_area(a, b, c).abs() as f64 * 0.5;
                 if signed_area(a, b, c) > 0.0 {
                     flipped.push([t[0], t[1], t[2]]);
                 }
@@ -48,6 +55,8 @@ pub fn extract(meshes: &[Mesh], materials: &[Material], images: &[Image]) -> UvD
                 edges: m.edges.chunks_exact(2).map(|e| [e[0], e[1]]).collect(),
                 flipped,
                 outside,
+                area_world,
+                area_uv,
                 material: m.material,
                 uvs,
             })
@@ -61,6 +70,13 @@ pub fn extract(meshes: &[Mesh], materials: &[Material], images: &[Image]) -> UvD
         })
         .collect();
     UvData { meshes, textures }
+}
+
+impl UvMesh {
+    /// Texture pixels per meter for a `texture_size`-pixel square texture.
+    pub fn texel_density(&self, texture_size: f64) -> Option<f64> {
+        (self.area_world > 1e-12).then(|| (self.area_uv / self.area_world).sqrt() * texture_size)
+    }
 }
 
 /// Twice the signed area in stored (v down) coordinates. A triangle wound counter-clockwise
@@ -181,6 +197,8 @@ mod tests {
         assert_eq!(b.flipped.len(), 2);
         assert_eq!(a.edges.len(), 5);
         assert_eq!(a.outside, 0);
+        // 1 m² mapped on the whole 0..1 square: density equals the texture size per meter.
+        assert!((a.area_world - 1.0).abs() < 1e-6 && (a.area_uv - 1.0).abs() < 1e-6);
     }
 
     #[test]

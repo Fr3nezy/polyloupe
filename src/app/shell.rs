@@ -886,6 +886,7 @@ impl ViewerApp {
             stat_card(ui, &thousands(info.vertices), "Vertices", w);
             stat_card(ui, &thousands(info.triangles), "Triangles", w);
         });
+        budget_bar(ui, &mut self.settings.triangle_budget, info.triangles);
         ui.add_space(12.0);
         self.compare_table(ui);
 
@@ -957,6 +958,8 @@ impl ViewerApp {
         });
         ui.add_space(12.0);
 
+        self.texel_rows(ui);
+
         // Scale: declared units, where the scene origin sits, and a sanity check on size.
         let bounds = self.visible_bounds(false);
         let units = match info.units {
@@ -969,9 +972,9 @@ impl ViewerApp {
         } else if bounds.min.z.abs() <= bounds.size().z.max(1e-6) * 0.01 {
             tr("On the floor").to_string()
         } else if bounds.min.z > 0.0 {
-            trf("Floating {d} above", &[("d", &fmt_len(bounds.min.z))])
+            trf("Raised +{d}", &[("d", &fmt_len(bounds.min.z))])
         } else {
-            trf("{d} below the floor", &[("d", &fmt_len(-bounds.min.z))])
+            trf("Sunk −{d}", &[("d", &fmt_len(-bounds.min.z))])
         };
         let origin = tr(pivot_place(Vec3::ZERO, &bounds)).to_string();
         widgets::section(ui, "Scale");
@@ -1010,6 +1013,78 @@ impl ViewerApp {
             t.row("Projection", &projection);
             t.row("Loaded in", &load);
         });
+    }
+}
+
+/// Triangle budget: an editable target and a bar that turns amber near it, red past it.
+fn budget_bar(ui: &mut Ui, budget: &mut usize, triangles: usize) {
+    {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(tr("Triangle budget")).size(12.0).color(theme::TEXT_DIM));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.add(egui::DragValue::new(&mut *budget).speed(100.0).range(0..=100_000_000).custom_formatter(|v, _| {
+                    if v == 0.0 { "—".to_string() } else { thousands(v as usize) }
+                }))
+                .on_hover_text(tr("Drag or type your target; 0 turns it off"));
+            });
+        });
+        let budget = *budget;
+        if budget == 0 {
+            return;
+        }
+        let ratio = triangles as f32 / budget as f32;
+        let color = if ratio > 1.0 { theme::ERROR } else if ratio > 0.9 { theme::MARK_OPEN } else { Color32::from_rgb(0x46, 0xa7, 0x58) };
+        let width = ui.available_width();
+        let (rect, _) = ui.allocate_exact_size(vec2(width, 18.0), Sense::hover());
+        let bar = Rect::from_min_size(rect.min + vec2(0.0, 6.0), vec2(width - 56.0, 6.0));
+        ui.painter().rect_filled(bar, CornerRadius::same(3), theme::WIDGET_HOVER);
+        let fill = Rect::from_min_size(bar.min, vec2(bar.width() * ratio.min(1.0), bar.height()));
+        ui.painter().rect_filled(fill, CornerRadius::same(3), color);
+        let text = format!("{:.0}%", ratio * 100.0);
+        ui.painter().text(pos2(rect.right(), bar.center().y), Align2::RIGHT_CENTER, text, theme::mono(11.0), color);
+    }
+}
+
+impl ViewerApp {
+    /// Texel density of the active object, or the range across the scene.
+    fn texel_rows(&self, ui: &mut Ui) {
+        let (Some(info), Some(uv)) = (&self.info, &self.uv) else { return };
+        // Base color resolution of each object's material, else a 2K texture.
+        let resolution = |object: usize| -> Option<(f64, bool)> {
+            let material = &info.materials[info.objects[object].material];
+            let base = material.maps.iter().find(|m| m.label.starts_with("Base Color"))?;
+            let (_, w, h) = info.images.get(base.image)?;
+            (*w > 0).then(|| (((*w as f64) * (*h as f64)).sqrt(), true))
+        };
+        let density = |object: usize| -> Option<(f64, bool)> {
+            let mesh = uv.meshes.get(object)?.as_ref()?;
+            let (size, real) = resolution(object).unwrap_or((2048.0, false));
+            Some((mesh.texel_density(size)?, real))
+        };
+        let (value, note) = match self.selection.active {
+            Some(a) => match density(a) {
+                Some((d, real)) => (format!("{:.0} px/m", d), (!real).then(|| tr("No texture: assuming 2048 px").to_string())),
+                None => (tr("No UVs").to_string(), None),
+            },
+            None => {
+                let all: Vec<(f64, bool)> = (0..info.objects.len()).filter(|&i| self.visible[i]).filter_map(density).collect();
+                if all.is_empty() {
+                    (tr("No UVs").to_string(), None)
+                } else {
+                    let lo = all.iter().map(|d| d.0).fold(f64::INFINITY, f64::min);
+                    let hi = all.iter().map(|d| d.0).fold(0.0, f64::max);
+                    let text = if hi / lo < 1.05 { format!("{lo:.0} px/m") } else { format!("{lo:.0} – {hi:.0} px/m") };
+                    let assumed = all.iter().any(|d| !d.1);
+                    (text, assumed.then(|| tr("Objects without a texture assume 2048 px").to_string()))
+                }
+            }
+        };
+        widgets::section(ui, "Texture");
+        table(ui, |t| t.row("Texel density", &crate::i18n::decimal(value)));
+        if let Some(note) = note {
+            ui.label(RichText::new(note).size(11.0).color(theme::TEXT_DIM));
+        }
+        ui.add_space(12.0);
     }
 
     fn materials_tab(&mut self, ui: &mut Ui) {

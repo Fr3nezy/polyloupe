@@ -130,6 +130,8 @@ pub struct Settings {
     pub show_face_orientation: bool,
     /// Object origins (pivots) as dots, like Blender.
     pub show_origins: bool,
+    /// Triangle budget shown against the model in Info (0 = none).
+    pub triangle_budget: usize,
     pub show_stats: bool,
     pub show_gizmo: bool,
 
@@ -185,6 +187,7 @@ impl Default for Settings {
             normal_size: 0.02,
             show_face_orientation: false,
             show_origins: false,
+            triangle_budget: 0,
             show_stats: true,
             show_gizmo: true,
             vsync: true,
