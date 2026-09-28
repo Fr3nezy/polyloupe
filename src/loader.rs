@@ -12,7 +12,7 @@ use crate::scene::{
     MeshData, MeshRig, MorphTarget, Node, Property, Scene, Skin, unique_edges, y_up_to_z_up,
 };
 
-pub const SUPPORTED_EXTENSIONS: &[&str] = &["glb", "gltf", "fbx", "obj", "stl"];
+pub const SUPPORTED_EXTENSIONS: &[&str] = &["glb", "gltf", "fbx", "obj", "stl", "ply", "3mf", "dae"];
 pub const ENVIRONMENT_EXTENSIONS: &[&str] = &["hdr", "exr"];
 
 pub fn is_supported(path: &Path) -> bool {
@@ -40,6 +40,9 @@ pub fn load_with(path: &Path, texture_dirs: &[PathBuf]) -> Result<Scene, String>
         Some("glb" | "gltf") => load_gltf(path, texture_dirs),
         Some("fbx" | "obj") => load_ufbx(path, texture_dirs),
         Some("stl") => load_stl(path),
+        Some("ply") => crate::formats::ply::load(path),
+        Some("3mf") => crate::formats::threemf::load(path),
+        Some("dae") => crate::formats::collada::load(path, texture_dirs),
         Some(other) => Err(format!(".{other} files aren't supported yet")),
         None => Err("The file has no extension, so its format is unknown".into()),
     }?;
@@ -90,6 +93,20 @@ enum ImageSource {
 struct ImageJob {
     name: String,
     source: ImageSource,
+}
+
+/// Texture files by name and candidate paths (looked up in `dirs` too), decoded in parallel.
+pub(crate) fn load_texture_files(files: Vec<(String, Vec<PathBuf>)>, dirs: &[PathBuf], warnings: &mut Vec<String>) -> Vec<Image> {
+    let jobs = files
+        .into_iter()
+        .map(|(name, candidates)| {
+            let source = find_texture(&candidates, dirs)
+                .and_then(|p| std::fs::read(p).ok())
+                .map_or(ImageSource::Missing, ImageSource::Bytes);
+            ImageJob { name, source }
+        })
+        .collect();
+    decode_images(jobs, warnings)
 }
 
 /// Decodes all images in parallel and builds their mip chains. Failures become a placeholder

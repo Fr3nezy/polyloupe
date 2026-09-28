@@ -177,8 +177,8 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "3D models" => "Modelli 3D",
         "Load HDRI environment" => "Carica ambiente HDRI",
         "This file" => "Questo file",
-        "{ext} isn't supported yet. Supported: glTF, GLB, FBX, OBJ, STL, and .hdr / .exr environments." => {
-            "{ext} non è ancora supportato. Supportati: glTF, GLB, FBX, OBJ, STL e ambienti .hdr / .exr."
+        "{ext} isn't supported yet. Supported: glTF, GLB, FBX, OBJ, STL, PLY, 3MF, DAE, and .hdr / .exr environments." => {
+            "{ext} non è ancora supportato. Supportati: glTF, GLB, FBX, OBJ, STL, PLY, 3MF, DAE e ambienti .hdr / .exr."
         }
         "Couldn't open {name}: {error}" => "Impossibile aprire {name}: {error}",
         "{first} (+{more} more)" => "{first} (+{more} altri)",

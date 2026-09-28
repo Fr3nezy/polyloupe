@@ -74,16 +74,25 @@ Root: HKLM; Subkey: "Software\Classes\.gltf\OpenWithProgids"; ValueType: string;
 Root: HKLM; Subkey: "Software\Classes\.fbx\OpenWithProgids"; ValueType: string; ValueName: "PolyLoupe.Model"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\.obj\OpenWithProgids"; ValueType: string; ValueName: "PolyLoupe.Model"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\.stl\OpenWithProgids"; ValueType: string; ValueName: "PolyLoupe.Model"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKLM; Subkey: "Software\Classes\.ply\OpenWithProgids"; ValueType: string; ValueName: "PolyLoupe.Model"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKLM; Subkey: "Software\Classes\.3mf\OpenWithProgids"; ValueType: string; ValueName: "PolyLoupe.Model"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKLM; Subkey: "Software\Classes\.dae\OpenWithProgids"; ValueType: string; ValueName: "PolyLoupe.Model"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\SupportedTypes"; ValueType: string; ValueName: ".glb"; ValueData: ""
 Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\SupportedTypes"; ValueType: string; ValueName: ".gltf"; ValueData: ""
 Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\SupportedTypes"; ValueType: string; ValueName: ".fbx"; ValueData: ""
 Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\SupportedTypes"; ValueType: string; ValueName: ".obj"; ValueData: ""
 Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\SupportedTypes"; ValueType: string; ValueName: ".stl"; ValueData: ""
+Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\SupportedTypes"; ValueType: string; ValueName: ".ply"; ValueData: ""
+Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\SupportedTypes"; ValueType: string; ValueName: ".3mf"; ValueData: ""
+Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\SupportedTypes"; ValueType: string; ValueName: ".dae"; ValueData: ""
 Root: HKLM; Subkey: "Software\Poly Loupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".glb"; ValueData: "PolyLoupe.Model"
 Root: HKLM; Subkey: "Software\Poly Loupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".gltf"; ValueData: "PolyLoupe.Model"
 Root: HKLM; Subkey: "Software\Poly Loupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".fbx"; ValueData: "PolyLoupe.Model"
 Root: HKLM; Subkey: "Software\Poly Loupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".obj"; ValueData: "PolyLoupe.Model"
 Root: HKLM; Subkey: "Software\Poly Loupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".stl"; ValueData: "PolyLoupe.Model"
+Root: HKLM; Subkey: "Software\Poly Loupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".ply"; ValueData: "PolyLoupe.Model"
+Root: HKLM; Subkey: "Software\Poly Loupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".3mf"; ValueData: "PolyLoupe.Model"
+Root: HKLM; Subkey: "Software\Poly Loupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".dae"; ValueData: "PolyLoupe.Model"
 
 ; Leftovers of the pre-rename "3D Viewer" builds.
 Root: HKLM; Subkey: "Software\Classes\3DViewer.Model"; ValueType: none; Flags: deletekey

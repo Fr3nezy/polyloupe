@@ -19,11 +19,13 @@ image = { version = "0.25", default-features = false, features = ["bmp", "exr", 
 log = "0.4.34"
 mikktspace = "0.3.0"
 pollster = "1"
+roxmltree = "0.20"
 rfd = "0.17.2"
 serde = { version = "1.0.229", features = ["derive"] }
 stl_io = "0.11.0"
 sys-locale = "0.3"
 ufbx = "0.11.5"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"

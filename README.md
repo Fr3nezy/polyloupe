@@ -14,7 +14,7 @@ ZBrush, Unity...), shows what's really in the model. Native, free and open sourc
 - Click to select, outliner sidebar (N), hide/reveal, frame selected.
 - Per-object texture channel view (Base Color, Roughness, Normal…) from the header's Channel picker.
 - Animation: skinning, morph targets and node animation (glTF, FBX) with a Blender-style timeline.
-- Explorer thumbnails for .glb .gltf .fbx .obj .stl, "Open with" and Default apps entries.
+- Explorer thumbnails for .glb .gltf .fbx .obj .stl .ply .3mf .dae, "Open with" and Default apps entries.
 - Image export (F12): PNG at 1×/2×/4× the viewport, optionally transparent.
 - English and Italian UI (follows Windows by default), Preferences window (Ctrl+,).
 - Optional "Open files in the same window".
@@ -77,7 +77,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build-installer.ps1
 
 It writes `target\installer\3DViewer-Setup-<version>.exe` (English or Italian wizard), which
 installs to `Program Files`, registers the thumbnail handler machine-wide, adds 3D Viewer to
-"Open with" and Default apps for .glb .gltf .fbx .obj .stl, and offers to open Default apps at
+"Open with" and Default apps for .glb .gltf .fbx .obj .stl .ply .3mf .dae, and offers to open Default apps at
 the end (Windows doesn't let installers pick the default app themselves). Without an installer:
 
 ```bash
