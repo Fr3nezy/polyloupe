@@ -91,14 +91,15 @@ pub fn sized_icon_button(ui: &mut Ui, icon: IconFn, selected: bool, size: Vec2) 
 /// Text button for toolbars ("Prospettiva"), 32 px tall.
 pub fn text_button(ui: &mut Ui, text: &str, selected: bool) -> Response {
     let font = egui::FontId::proportional(13.0);
-    let galley = ui.painter().layout_no_wrap(tr(text).to_string(), font, theme::TEXT);
-    let size = Vec2::new(galley.size().x + 24.0, theme::TOOLBAR_HEIGHT);
+    let width = ui.painter().layout_no_wrap(tr(text).to_string(), font.clone(), theme::TEXT).size().x;
+    let size = Vec2::new(width + 24.0, theme::TOOLBAR_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     if ui.is_rect_visible(rect) {
         let (fill, fg) = colors(selected, response.hovered(), response.is_pointer_button_down_on());
         let fg = if selected || response.hovered() { fg } else { theme::TEXT };
         ui.painter().rect_filled(rect, radius(), fill);
-        ui.painter().galley(rect.center() - galley.size() * 0.5, galley, fg);
+        // Laid out with the final color: a galley's own color wins over the one passed to paint it.
+        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, tr(text), font, fg);
         focus_ring(ui, rect, &response);
     }
     response

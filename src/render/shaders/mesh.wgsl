@@ -185,6 +185,16 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     let dx = dpdx(in.uv);
     let dy = dpdy(in.uv);
 
+    if section_cuts(in.world_pos) {
+        discard;
+    }
+    // Inside of a cut model: back faces seen through the section, drawn as a hatched cap.
+    if !front && dot(g.section.xyz, g.section.xyz) > 0.0 {
+        let stripe = fract((in.clip.x + in.clip.y) / 9.0) < 0.5;
+        let cap = select(vec3<f32>(0.55, 0.16, 0.12), vec3<f32>(0.85, 0.3, 0.22), stripe);
+        return vec4<f32>(srgb_to_linear(cap), 1.0);
+    }
+
     // Backface culling is pipeline state: a facing-dependent discard here made some drivers
     // drop front-facing triangles as well.
     var n = normalize(in.normal);
@@ -310,6 +320,7 @@ fn fs_background(in: FullOut) -> @location(0) vec4<f32> {
 
 struct WireOut {
     @builtin(position) clip: vec4<f32>,
+    @location(0) world_pos: vec3<f32>,
 };
 
 @vertex
@@ -319,7 +330,9 @@ fn vs_wire(
     @location(6) weights: vec4<f32>,
 ) -> WireOut {
     var out: WireOut;
-    var clip = g.view_proj * (vertex_matrix(joints, weights) * vec4<f32>(pos, 1.0));
+    let wp = vertex_matrix(joints, weights) * vec4<f32>(pos, 1.0);
+    out.world_pos = wp.xyz;
+    var clip = g.view_proj * wp;
     // Nudge towards the camera (reverse-Z) so edges win the depth test against their own faces.
     clip.z = clip.z * 1.0008 + 1e-7 * clip.w;
     out.clip = clip;
@@ -327,7 +340,10 @@ fn vs_wire(
 }
 
 @fragment
-fn fs_wire() -> @location(0) vec4<f32> {
+fn fs_wire(in: WireOut) -> @location(0) vec4<f32> {
+    if section_cuts(in.world_pos) {
+        discard;
+    }
     var rgb = g.wire_color.rgb;
     // In wireframe mode the random color mode tints wires per object, like Blender.
     if g.shading.x == 0u && g.shading.w == 2u {
@@ -370,9 +386,11 @@ fn vs_marker(
     out.local = vec2<f32>(0.0);
     let shown = (kind == 0u && g.markers.x != 0u) || (kind == 1u && g.markers.y != 0u)
         || (kind == 2u && g.markers.z != 0u);
-    let ca = g.view_proj * (vertex_matrix(ja, wa) * vec4<f32>(a, 1.0));
-    let cb = g.view_proj * (vertex_matrix(jb, wb) * vec4<f32>(b, 1.0));
-    if !shown || ca.w <= 0.0 || cb.w <= 0.0 {
+    let wa4 = vertex_matrix(ja, wa) * vec4<f32>(a, 1.0);
+    let wb4 = vertex_matrix(jb, wb) * vec4<f32>(b, 1.0);
+    let ca = g.view_proj * wa4;
+    let cb = g.view_proj * wb4;
+    if !shown || ca.w <= 0.0 || cb.w <= 0.0 || section_cuts(wa4.xyz) || section_cuts(wb4.xyz) {
         // Every corner at the same point outside the view: nothing is drawn.
         out.clip = vec4<f32>(2.0, 2.0, 0.5, 1.0);
         return out;
@@ -438,8 +456,9 @@ fn vs_id(
     @location(0) pos: vec3<f32>,
     @location(5) joints: vec4<u32>,
     @location(6) weights: vec4<f32>,
-) -> @builtin(position) vec4<f32> {
-    return g.view_proj * (vertex_matrix(joints, weights) * vec4<f32>(pos, 1.0));
+) -> WireOut {
+    let wp = vertex_matrix(joints, weights) * vec4<f32>(pos, 1.0);
+    return WireOut(g.view_proj * wp, wp.xyz);
 }
 
 struct IdOut {
@@ -449,6 +468,10 @@ struct IdOut {
 };
 
 @fragment
-fn fs_id(@builtin(position) frag: vec4<f32>) -> IdOut {
-    return IdOut(obj.info.x, frag.z);
+fn fs_id(in: WireOut) -> IdOut {
+    // Cut parts can't be picked or outlined.
+    if section_cuts(in.world_pos) {
+        discard;
+    }
+    return IdOut(obj.info.x, in.clip.z);
 }
