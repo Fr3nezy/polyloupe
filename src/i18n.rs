@@ -249,6 +249,22 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Back to select" => "Torna a Seleziona",
         "No vertex snap" => "Senza snap ai vertici",
         "Section" => "Sezione",
+        "Compare with…" => "Confronta con…",
+        "Compare with another model (Ctrl Shift O), or drop it on the right half" => {
+            "Confronta con un altro modello (Ctrl Shift O), o trascinalo sulla metà destra"
+        }
+        "A/B side by side" => "A/B affiancati",
+        "A/B split: drag the divider" => "A/B a tendina: trascina il divisore",
+        "Swap A and B" => "Scambia A e B",
+        "Close the comparison" => "Chiudi il confronto",
+        "Comparison" => "Confronto",
+        "Non-manifold" => "Non-manifold",
+        "Overlapping" => "Sovrapposti",
+        "Size {axis}" => "Dimensione {axis}",
+        "Textures" => "Texture",
+        "Drop to compare" => "Rilascia per confrontare",
+        "Replaces the model" => "Sostituisce il modello",
+        "Opens it as B, next to A" => "Lo apre come B, accanto ad A",
         "Drag the plane" => "Trascina il piano",
         "Cut across this axis" => "Taglia lungo questo asse",
         "Drag in the view with the Section tool to move it" => "Trascina nella vista con lo strumento Sezione per spostarlo",

@@ -33,6 +33,9 @@ pub struct CaptureOptions {
     pub measure: Option<[[u32; 2]; 2]>,
     /// Section along an axis (0..2) at a fraction of the bounds, optionally flipped.
     pub section: Option<(usize, f32, bool)>,
+    /// Model B for an A/B comparison, and whether to use the split layout.
+    pub compare: Option<PathBuf>,
+    pub compare_split: bool,
     /// Channel to show on the selection (`--select`) only.
     pub channel: Option<TexturePass>,
     pub clip: Option<usize>,
@@ -166,6 +169,8 @@ pub fn parse() -> Result<LaunchOptions, String> {
             }
             "--transparent" => capture.settings.push((arg, None)),
             "--channel" => capture.channel = Some(parse_pass(&value("--channel")?)),
+            "--compare" => capture.compare = Some(PathBuf::from(value("--compare")?)),
+            "--compare-split" => capture.compare_split = true,
             "--section" => {
                 // x|y|z[,position 0..1][,flip]
                 let v = value("--section")?;
