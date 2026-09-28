@@ -30,6 +30,8 @@ struct Globals {
     section: vec4<f32>,
     // x: normal line length (world units, 0 = off), y: 1 for the face orientation overlay.
     normals: vec4<f32>,
+    // x: 1 when the interface calls Y up: world Y lines are drawn blue (Z) and world Z green (Y).
+    display: vec4<f32>,
 };
 
 fn section_cuts(world_pos: vec3<f32>) -> bool {

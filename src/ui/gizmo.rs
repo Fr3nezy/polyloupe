@@ -9,6 +9,7 @@ use eframe::egui::{
 use glam::Vec3;
 
 use super::theme;
+use crate::axes::UpAxis;
 use crate::camera::{AxisView, Camera};
 
 pub enum GizmoAction {
@@ -26,20 +27,35 @@ struct Axis {
     positive: bool,
 }
 
-const AXES: [Axis; 6] = [
-    Axis { dir: Vec3::X, color: theme::AXIS_X, label: "X", positive: true },
-    Axis { dir: Vec3::Y, color: theme::AXIS_Y, label: "Y", positive: true },
-    Axis { dir: Vec3::Z, color: theme::AXIS_Z, label: "Z", positive: true },
-    Axis { dir: Vec3::NEG_X, color: theme::AXIS_X, label: "-X", positive: false },
-    Axis { dir: Vec3::NEG_Y, color: theme::AXIS_Y, label: "-Y", positive: false },
-    Axis { dir: Vec3::NEG_Z, color: theme::AXIS_Z, label: "-Z", positive: false },
+/// The six world directions: internal axis index and sign.
+const DIRS: [(Vec3, usize, f32); 6] = [
+    (Vec3::X, 0, 1.0),
+    (Vec3::Y, 1, 1.0),
+    (Vec3::Z, 2, 1.0),
+    (Vec3::NEG_X, 0, -1.0),
+    (Vec3::NEG_Y, 1, -1.0),
+    (Vec3::NEG_Z, 2, -1.0),
 ];
+
+/// Bubbles named and colored after the display convention: with Y up, world +Z is "Y"
+/// (green) and world -Y is "Z" (blue).
+fn axes(up: UpAxis) -> Vec<Axis> {
+    DIRS.iter()
+        .map(|&(dir, i, sign)| {
+            let (d, s) = up.display(i);
+            let positive = sign * s > 0.0;
+            let label = if positive { crate::axes::NAMES[d] } else { ["-X", "-Y", "-Z"][d] };
+            Axis { dir, color: crate::axes::color(d), label, positive }
+        })
+        .collect()
+}
 
 /// Diameter of the gizmo disc, used to place it.
 pub const WIDTH: f32 = (AXIS_LEN + BUBBLE + 6.0) * 2.0;
 const DISC: f32 = WIDTH * 0.5;
 
-pub fn show(ui: &mut Ui, center: Pos2, camera: &Camera) -> Vec<GizmoAction> {
+pub fn show(ui: &mut Ui, center: Pos2, camera: &Camera, up: UpAxis) -> Vec<GizmoAction> {
+    let axes = axes(up);
     let mut actions = Vec::new();
     let (right, up, back) = (camera.right(), camera.up(), camera.back());
 
@@ -49,7 +65,7 @@ pub fn show(ui: &mut Ui, center: Pos2, camera: &Camera) -> Vec<GizmoAction> {
     let painter = ui.painter();
 
     // Project axes and sort back to front.
-    let mut projected: Vec<(f32, Pos2, &Axis)> = AXES
+    let mut projected: Vec<(f32, Pos2, &Axis)> = axes
         .iter()
         .map(|a| {
             let offset = vec2(a.dir.dot(right), -a.dir.dot(up)) * AXIS_LEN;

@@ -71,10 +71,14 @@ fn fs_grid(in: GridOut) -> GridFrag {
     let red = vec3<f32>(0.80, 0.16, 0.20);
     let green = vec3<f32>(0.36, 0.62, 0.08);
     let blue = vec3<f32>(0.14, 0.38, 0.80);
+    // Colors follow the displayed axis names (Y up shows world Y as Z, world Z as Y).
+    let y_up = g.display.x > 0.5;
+    let world_y = select(green, blue, y_up);
+    let world_z = select(blue, green, y_up);
     switch axis {
-        case 0u: { uv = hit.yz; col_u = blue; col_v = green; }
-        case 1u: { uv = hit.xz; col_u = blue; col_v = red; }
-        default: { uv = hit.xy; col_u = green; col_v = red; }
+        case 0u: { uv = hit.yz; col_u = world_z; col_v = world_y; }
+        case 1u: { uv = hit.xz; col_u = world_z; col_v = red; }
+        default: { uv = hit.xy; col_u = world_y; col_v = red; }
     }
 
     let cell = g.grid.x;

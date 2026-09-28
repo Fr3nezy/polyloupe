@@ -93,6 +93,9 @@ impl CaptureOptions {
                 "--env-bg" => s.env_background = true,
                 "--export-scale" => s.export_scale = v.parse().unwrap_or(2),
                 "--budget" => s.triangle_budget = v.parse().unwrap_or(0),
+                "--up" => {
+                    s.up_axis = if v.eq_ignore_ascii_case("y") { crate::axes::UpAxis::Y } else { crate::axes::UpAxis::Z }
+                }
                 "--nav" => {
                     s.navigation = crate::navigation::Navigation::ALL
                         .into_iter()
@@ -171,7 +174,7 @@ pub fn parse() -> Result<LaunchOptions, String> {
                 capture.export = Some(PathBuf::from(value("--export")?));
                 capturing = true;
             }
-            "--export-scale" | "--nav" | "--budget" => {
+            "--export-scale" | "--nav" | "--budget" | "--up" => {
                 let v = value(&arg)?;
                 capture.settings.push((arg, Some(v)));
             }

@@ -502,6 +502,7 @@ impl ViewerApp {
             .show(ctx, |ui| {
                 let s = &mut self.settings;
                 widgets::section(ui, "Navigation");
+                let before = s.navigation;
                 egui::ComboBox::from_label(tr("Style"))
                     .selected_text(s.navigation.label())
                     .show_ui(ui, |ui| {
@@ -509,6 +510,20 @@ impl ViewerApp {
                             ui.selectable_value(&mut s.navigation, nav, nav.label());
                         }
                     });
+                if s.navigation != before {
+                    if let Some(up) = s.navigation.suggested_up() {
+                        s.up_axis = up;
+                    }
+                }
+                ui.horizontal(|ui| {
+                    ui.label(tr("Up axis"));
+                    widgets::segmented(ui, &mut s.up_axis, &[(crate::axes::UpAxis::Z, "Z up"), (crate::axes::UpAxis::Y, "Y up")]);
+                });
+                ui.label(
+                    RichText::new(tr("Z: Blender, 3ds Max, Unreal. Y: Maya, Unity, Houdini, ZBrush, Substance. Only names, colors and numbers change; the model looks the same."))
+                        .size(11.0)
+                        .color(theme::TEXT_DIM),
+                );
                 ui.add_space(6.0);
                 widgets::section(ui, "Interface");
                 egui::ComboBox::from_label(tr("Language"))
@@ -592,6 +607,9 @@ impl ViewerApp {
                     .min_size(vec2(ui.available_width(), 28.0));
                 if ui.add(button).clicked() {
                     self.settings.navigation = nav;
+                    if let Some(up) = nav.suggested_up() {
+                        self.settings.up_axis = up;
+                    }
                 }
             }
             ui.add_space(6.0);
@@ -1308,7 +1326,7 @@ impl ViewerApp {
             if gizmo_shown {
                 let center = pos2(rect.right() - gizmo::WIDTH * 0.5 - 16.0, rect.top() + gizmo::WIDTH * 0.5 + 16.0);
                 let ppp = ctx.pixels_per_point();
-                for action in gizmo::show(ui, center, &self.camera) {
+                for action in gizmo::show(ui, center, &self.camera, self.settings.up_axis) {
                     match action {
                         GizmoAction::Orbit(d) => self.camera.orbit(d.x * ppp, d.y * ppp),
                         GizmoAction::AxisView(v) => self.camera.set_axis_view(v),
