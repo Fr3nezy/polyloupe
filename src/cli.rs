@@ -90,6 +90,7 @@ impl CaptureOptions {
                 }
                 "--env-bg" => s.env_background = true,
                 "--export-scale" => s.export_scale = v.parse().unwrap_or(2),
+                "--budget" => s.triangle_budget = v.parse().unwrap_or(0),
                 "--nav" => {
                     s.navigation = crate::navigation::Navigation::ALL
                         .into_iter()
@@ -168,7 +169,7 @@ pub fn parse() -> Result<LaunchOptions, String> {
                 capture.export = Some(PathBuf::from(value("--export")?));
                 capturing = true;
             }
-            "--export-scale" | "--nav" => {
+            "--export-scale" | "--nav" | "--budget" => {
                 let v = value(&arg)?;
                 capture.settings.push((arg, Some(v)));
             }
