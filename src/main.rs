@@ -5,6 +5,7 @@ mod anim;
 mod app;
 mod camera;
 mod cli;
+mod formats;
 mod i18n;
 mod icon;
 mod instance;

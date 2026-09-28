@@ -6,7 +6,7 @@
 #
 # Copies polyloupe.exe and polyloupe_thumbs.dll out of the build folder (so rebuilding the project
 # never fights with Explorer holding the DLL), then registers the handler for
-# .glb .gltf .fbx .obj .stl.
+# .glb .gltf .fbx .obj .stl .ply .3mf .dae.
 #
 # Current user: %LOCALAPPDATA%\Programs\Poly Loupe, HKCU, no admin rights. Explorer only hands the
 # handler the file's bytes, so .obj renders without its .mtl and .gltf with external files fails.
@@ -76,5 +76,5 @@ if ($AllUsers) {
     if (Test-Path $userDll) { Invoke-Regsvr32 @('/s', '/u') $userDll }
 }
 
-Write-Host "Installed to $dest and registered for .glb .gltf .fbx .obj .stl."
+Write-Host "Installed to $dest and registered for .glb .gltf .fbx .obj .stl .ply .3mf .dae."
 Write-Host 'Existing thumbnails refresh once Windows drops its cache (new files show immediately).'

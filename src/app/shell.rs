@@ -969,7 +969,7 @@ impl ViewerApp {
         let units = match info.units {
             crate::scene::Units::Meters => tr("Meters (glTF)").to_string(),
             crate::scene::Units::Undeclared => tr("Not stored (m)").to_string(),
-            crate::scene::Units::Declared(m) => unit_name(m),
+            crate::scene::Units::Declared(m) => unit_name(m, &info.path),
         };
         let floor = if !bounds.is_valid() {
             String::new()
@@ -1517,11 +1517,12 @@ fn pivot_place(p: Vec3, b: &Aabb) -> &'static str {
     }
 }
 
-fn unit_name(meters: f64) -> String {
+fn unit_name(meters: f64, path: &Path) -> String {
+    let format = path.extension().map_or(String::new(), |e| e.to_string_lossy().to_uppercase());
     let known = [(1.0, "Meters"), (0.01, "Centimeters"), (0.001, "Millimeters"), (0.0254, "Inches"), (0.3048, "Feet"), (1000.0, "Kilometers")];
     match known.iter().find(|(m, _)| (meters / m - 1.0).abs() < 1e-3) {
-        Some((_, name)) => format!("{} (FBX)", tr(name)),
-        None => format!("{} m (FBX)", crate::i18n::decimal(format!("{meters}"))),
+        Some((_, name)) => format!("{} ({format})", tr(name)),
+        None => format!("{} m ({format})", crate::i18n::decimal(format!("{meters}"))),
     }
 }
 

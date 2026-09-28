@@ -61,7 +61,7 @@ const CLSID_THUMBNAILER_INPROC: GUID = GUID::from_u128(0x1db9db9f_86bc_47bb_88ed
 const CLSID_INPROC_STRING: &str = "{1db9db9f-86bc-47bb-88ed-99c5551e49f1}";
 /// The shell's IThumbnailProvider handler category.
 const THUMBNAIL_HANDLER_KEY: &str = "{e357fccd-a995-4576-b01f-234630154e96}";
-const EXTENSIONS: &[&str] = &[".glb", ".gltf", ".fbx", ".obj", ".stl"];
+const EXTENSIONS: &[&str] = &[".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply", ".3mf", ".dae"];
 const RENDER_TIMEOUT: Duration = Duration::from_secs(30);
 
 static MODULE: AtomicIsize = AtomicIsize::new(0);

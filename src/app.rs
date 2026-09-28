@@ -367,7 +367,7 @@ impl ViewerApp {
                 .map(|e| format!(".{}", e.to_string_lossy()))
                 .unwrap_or_else(|| tr("This file").into());
             let text = trf(
-                "{ext} isn't supported yet. Supported: glTF, GLB, FBX, OBJ, STL, and .hdr / .exr environments.",
+                "{ext} isn't supported yet. Supported: glTF, GLB, FBX, OBJ, STL, PLY, 3MF, DAE, and .hdr / .exr environments.",
                 &[("ext", &ext)],
             );
             self.show_toast(ctx, text, true);
@@ -396,6 +396,9 @@ impl ViewerApp {
             .add_filter("FBX", &["fbx"])
             .add_filter("Wavefront OBJ", &["obj"])
             .add_filter("STL", &["stl"])
+            .add_filter("PLY", &["ply"])
+            .add_filter("3MF", &["3mf"])
+            .add_filter("COLLADA", &["dae"])
             .pick_file();
         if let Some(path) = picked {
             self.open(path, ctx);
