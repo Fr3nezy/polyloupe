@@ -29,6 +29,8 @@ pub struct CaptureOptions {
     pub select: Option<usize>,
     /// Simulated left click at viewport pixel coordinates (exercises GPU picking).
     pub click: Option<[u32; 2]>,
+    /// Two measurement points at viewport pixel coordinates (Measure tool).
+    pub measure: Option<[[u32; 2]; 2]>,
     /// Channel to show on the selection (`--select`) only.
     pub channel: Option<TexturePass>,
     pub clip: Option<usize>,
@@ -162,6 +164,12 @@ pub fn parse() -> Result<LaunchOptions, String> {
             }
             "--transparent" => capture.settings.push((arg, None)),
             "--channel" => capture.channel = Some(parse_pass(&value("--channel")?)),
+            "--measure" => {
+                let v = value("--measure")?;
+                let n: Vec<u32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                let [x1, y1, x2, y2] = n[..] else { return Err("--measure expects X1,Y1,X2,Y2".into()) };
+                capture.measure = Some([[x1, y1], [x2, y2]]);
+            }
             "--click" => {
                 let v = value("--click")?;
                 let (x, y) = v.split_once(',').ok_or("--click expects X,Y")?;

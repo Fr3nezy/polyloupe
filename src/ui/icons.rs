@@ -231,6 +231,16 @@ pub fn move_arrows(p: &Painter, rect: Rect, color: Color32) {
 }
 
 /// Zoom tool: magnifier with a plus.
+/// Diagonal ruler with tick marks.
+pub fn ruler(p: &Painter, rect: Rect, color: Color32) {
+    let g = grid(rect, 18.0);
+    let s = stroke_for(rect, 18.0, 1.5, color);
+    p.add(Shape::closed_line(vec![g(2.5, 12.0), g(12.0, 2.5), g(15.5, 6.0), g(6.0, 15.5)], s));
+    for (x, y, len) in [(5.0, 9.5, 2.0), (7.5, 7.0, 3.0), (10.0, 4.5, 2.0)] {
+        p.line_segment([g(x, y), g(x + len * 0.7, y + len * 0.7)], s);
+    }
+}
+
 pub fn magnifier(p: &Painter, rect: Rect, color: Color32) {
     let g = grid(rect, 18.0);
     let s = stroke_for(rect, 18.0, 1.5, color);

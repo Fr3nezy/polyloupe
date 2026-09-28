@@ -24,6 +24,8 @@ pub(super) enum Tool {
     Orbit,
     Pan,
     Zoom,
+    /// Click two surface points to measure the distance between them.
+    Measure,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -303,6 +305,7 @@ impl ViewerApp {
                 (Tool::Orbit, icons::orbit, "Orbit (O)"),
                 (Tool::Pan, icons::move_arrows, "Pan (G)"),
                 (Tool::Zoom, icons::magnifier, "Zoom (drag up/down)"),
+                (Tool::Measure, icons::ruler, "Measure (M)"),
             ] {
                 if tool_button(ui, icon, self.tool == tool).on_hover_text(tr(tip)).clicked() {
                     self.tool = tool;
@@ -542,6 +545,68 @@ impl ViewerApp {
             });
         if let Some(a) = action {
             self.apply_channel(a);
+        }
+    }
+
+    /// Measurements: the distance line, its X/Y/Z legs along the axes and a label with the
+    /// length and the per-axis deltas. Drawn on top of the model so they're never hidden.
+    pub(super) fn draw_measures(&self, ui: &Ui, viewport: Rect) {
+        let preview = self.measure_start.zip(self.measure_hover);
+        if self.measures.is_empty() && self.measure_start.is_none() {
+            return;
+        }
+        let aspect = viewport.width() / viewport.height().max(1.0);
+        let view_proj = self.camera.projection(aspect) * self.camera.view_matrix();
+        let project = |p: Vec3| {
+            let c = view_proj * p.extend(1.0);
+            (c.w > 1e-6).then(|| {
+                let n = c.truncate() / c.w;
+                pos2(viewport.left() + (n.x * 0.5 + 0.5) * viewport.width(), viewport.top() + (0.5 - n.y * 0.5) * viewport.height())
+            })
+        };
+        let painter = ui.painter().with_clip_rect(viewport);
+        let shadow = Color32::from_black_alpha(170);
+        let dot = |at: Pos2| {
+            painter.circle(at, 4.0, theme::TEXT, Stroke::new(1.5, shadow));
+        };
+        let segments = self.measures.iter().map(|m| (m[0], m[1], false)).chain(preview.map(|(a, b)| (a, b, true)));
+        for (a, b, live) in segments {
+            let (Some(sa), Some(sb)) = (project(a), project(b)) else { continue };
+            // Legs along X, then Y, then Z, like walking the bounding box of the segment.
+            let corners = [a, Vec3::new(b.x, a.y, a.z), Vec3::new(b.x, b.y, a.z), b];
+            for (k, color) in [theme::AXIS_X, theme::AXIS_Y, theme::AXIS_Z].into_iter().enumerate() {
+                if (corners[k + 1] - corners[k]).length() < 1e-6 {
+                    continue;
+                }
+                if let (Some(p), Some(q)) = (project(corners[k]), project(corners[k + 1])) {
+                    painter.extend(egui::Shape::dashed_line(&[p, q], Stroke::new(1.2, color.gamma_multiply(0.85)), 5.0, 4.0));
+                }
+            }
+            painter.line_segment([sa, sb], Stroke::new(4.0, shadow));
+            painter.line_segment([sa, sb], Stroke::new(2.0, if live { theme::TEXT.gamma_multiply(0.8) } else { theme::TEXT }));
+            dot(sa);
+            dot(sb);
+
+            let d = b - a;
+            let mut job = LayoutJob::default();
+            job.append(&fmt_len(d.length()), 0.0, TextFormat { font_id: theme::medium(14.0), color: theme::TEXT, ..Default::default() });
+            job.append("\n", 0.0, TextFormat::default());
+            for (k, (axis, color)) in [("X", theme::AXIS_X), ("Y", theme::AXIS_Y), ("Z", theme::AXIS_Z)].into_iter().enumerate() {
+                let sep = if k > 0 { "  " } else { "" };
+                job.append(&format!("{sep}{axis} "), 0.0, TextFormat { font_id: theme::mono(10.5), color, ..Default::default() });
+                job.append(&fmt_len(d[k].abs()), 0.0, TextFormat { font_id: theme::mono(10.5), color: theme::TEXT_DIM, ..Default::default() });
+            }
+            let galley = painter.layout_job(job);
+            let mid = pos2((sa.x + sb.x) * 0.5, (sa.y + sb.y) * 0.5);
+            let chip = Rect::from_center_size(mid - vec2(0.0, galley.size().y * 0.5 + 16.0), galley.size() + vec2(20.0, 12.0));
+            painter.rect_filled(chip, CornerRadius::same(theme::RADIUS), Color32::from_black_alpha(215));
+            painter.rect_stroke(chip, CornerRadius::same(theme::RADIUS), Stroke::new(1.0, theme::BORDER), egui::StrokeKind::Inside);
+            painter.galley(chip.min + vec2(10.0, 6.0), galley, theme::TEXT);
+        }
+        if let (Some(a), None) = (self.measure_start, preview) {
+            if let Some(sa) = project(a) {
+                dot(sa);
+            }
         }
     }
 
@@ -995,7 +1060,16 @@ impl ViewerApp {
     pub(super) fn footer(&mut self, ui: &mut Ui) {
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
-            if self.info.is_some() {
+            if self.info.is_some() && self.tool == Tool::Measure {
+                widgets::hint(ui, &["LMB"], if self.measure_start.is_some() { "Second point" } else { "First point" });
+                if self.measure_start.is_some() {
+                    widgets::hint(ui, &["Esc"], "Cancel point");
+                }
+                if !self.measures.is_empty() {
+                    widgets::hint(ui, &["Del"], "Clear measurements");
+                }
+                widgets::hint(ui, &["Q"], "Back to select");
+            } else if self.info.is_some() {
                 widgets::hint(ui, &["LMB"], "Select");
                 for (keys, action) in self.settings.navigation.hints() {
                     widgets::hint(ui, keys, action);

@@ -442,7 +442,13 @@ fn vs_id(
     return g.view_proj * (vertex_matrix(joints, weights) * vec4<f32>(pos, 1.0));
 }
 
+struct IdOut {
+    @location(0) id: u32,
+    // Depth for picking a 3D point (the depth buffer itself can't be read one texel at a time).
+    @location(1) depth: f32,
+};
+
 @fragment
-fn fs_id() -> @location(0) u32 {
-    return obj.info.x;
+fn fs_id(@builtin(position) frag: vec4<f32>) -> IdOut {
+    return IdOut(obj.info.x, frag.z);
 }
