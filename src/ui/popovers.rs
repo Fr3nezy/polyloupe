@@ -106,6 +106,15 @@ pub fn overlays(ui: &mut Ui, s: &mut Settings) {
             .on_hover_text(tr("Edges with a single face: holes and open borders"));
         marker_toggle(ui, &mut s.show_overlapping, "Overlapping vertices", theme::MARK_OVERLAP)
             .on_hover_text(tr("Separate vertices closer than 0.1 mm, what Merge by Distance would weld"));
+        marker_toggle(ui, &mut s.show_normals, "Normals", theme::MARK_NORMAL)
+            .on_hover_text(tr("A line along each vertex normal"));
+        if s.show_normals {
+            ui.indent("normal_size", |ui| {
+                ui.add(egui::Slider::new(&mut s.normal_size, 0.002..=0.2).logarithmic(true).show_value(false).text(tr("Length")));
+            });
+        }
+        ui.checkbox(&mut s.show_face_orientation, tr("Face orientation"))
+            .on_hover_text(tr("Front faces blue, back faces red: flipped faces show up red"));
     });
     ui.separator();
     widgets::section(ui, "Performance");

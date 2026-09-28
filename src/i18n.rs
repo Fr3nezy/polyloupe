@@ -258,6 +258,14 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Swap A and B" => "Scambia A e B",
         "Close the comparison" => "Chiudi il confronto",
         "Comparison" => "Confronto",
+        "Normals" => "Normali",
+        "A line along each vertex normal" => "Una linea lungo la normale di ogni vertice",
+        "Length" => "Lunghezza",
+        "Face orientation" => "Orientamento facce",
+        "Front faces blue, back faces red: flipped faces show up red" => {
+            "Fronte delle facce in blu, retro in rosso: le facce girate appaiono rosse"
+        }
+        "Inverted normals" => "Normali invertite",
         "UV layout (U)" => "Layout UV (U)",
         "No UVs on these objects" => "Questi oggetti non hanno UV",
         "Mirrored" => "Ribaltate",

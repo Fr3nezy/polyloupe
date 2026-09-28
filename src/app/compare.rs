@@ -127,6 +127,7 @@ impl ViewerApp {
     pub(super) fn render_compare(&mut self, ui: &mut Ui, frame: &mut eframe::Frame, rect: Rect) {
         let effective = self.effective_settings();
         let section = self.section_plane();
+        let normal_length = self.normal_length();
         let (grid_cell, grid_fade, grid_axis) = grid_params(&self.camera);
         let (Some(c), Some(rs)) = (&mut self.compare, frame.wgpu_render_state()) else { return };
         let target = match c.mode {
@@ -148,6 +149,7 @@ impl ViewerApp {
             pick: None,
             transparent: false,
             section,
+            normal_length,
         };
         let texture = {
             let mut egui_renderer = rs.renderer.write();
@@ -286,7 +288,7 @@ impl ViewerApp {
         };
         let (sa, sb) = (size(a), size(b));
         let qa = |i: &SceneInfo, f: fn(&qa::Report) -> usize| i.qa.as_ref().map(f);
-        let rows: [(&str, Option<usize>, Option<usize>); 8] = [
+        let rows: [(&str, Option<usize>, Option<usize>); 9] = [
             ("Triangles", Some(a.triangles), Some(b.triangles)),
             ("Vertices", Some(a.vertices), Some(b.vertices)),
             ("Objects", Some(a.objects.len()), Some(b.objects.len())),
@@ -295,6 +297,7 @@ impl ViewerApp {
             ("Non-manifold", qa(a, |r| r.non_manifold_edges), qa(b, |r| r.non_manifold_edges)),
             ("Open edges", qa(a, |r| r.open_edges), qa(b, |r| r.open_edges)),
             ("Overlapping", qa(a, |r| r.overlapping_vertices), qa(b, |r| r.overlapping_vertices)),
+            ("Inverted normals", qa(a, |r| r.inverted_normals), qa(b, |r| r.inverted_normals)),
         ];
         let value = |v: Option<usize>| v.map_or("…".to_string(), thousands);
         let delta = |va: Option<usize>, vb: Option<usize>| match (va, vb) {

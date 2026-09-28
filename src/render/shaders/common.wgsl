@@ -28,6 +28,8 @@ struct Globals {
     markers: vec4<u32>,
     // Section plane: xyz normal (zero when off), w offset. Points with dot(n, p) > w are cut.
     section: vec4<f32>,
+    // x: normal line length (world units, 0 = off), y: 1 for the face orientation overlay.
+    normals: vec4<f32>,
 };
 
 fn section_cuts(world_pos: vec3<f32>) -> bool {

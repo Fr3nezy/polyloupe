@@ -123,6 +123,11 @@ pub struct Settings {
     pub show_non_manifold: bool,
     pub show_open_edges: bool,
     pub show_overlapping: bool,
+    /// Vertex normal lines and their length as a fraction of the scene size.
+    pub show_normals: bool,
+    pub normal_size: f32,
+    /// Front faces blue, back faces red.
+    pub show_face_orientation: bool,
     pub show_stats: bool,
     pub show_gizmo: bool,
 
@@ -174,6 +179,9 @@ impl Default for Settings {
             show_non_manifold: false,
             show_open_edges: false,
             show_overlapping: false,
+            show_normals: false,
+            normal_size: 0.02,
+            show_face_orientation: false,
             show_stats: true,
             show_gizmo: true,
             vsync: true,

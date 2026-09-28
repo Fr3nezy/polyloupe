@@ -33,6 +33,8 @@ pub struct Report {
     pub open_edges: usize,
     pub overlapping_vertices: usize,
     pub degenerate_faces: usize,
+    /// Faces whose vertex normals point against their winding (inside out when lit).
+    pub inverted_normals: usize,
 }
 
 impl Report {
@@ -109,6 +111,14 @@ fn analyze_group(meshes: &[Mesh], group: &[usize], report: &mut Report, marks: &
             if w[0] == w[1] || w[1] == w[2] || w[0] == w[2] {
                 report.degenerate_faces += 1;
                 continue;
+            }
+            // Shading normals against the face's winding.
+            let m = &meshes[mi];
+            let p = [0, 1, 2].map(|j| glam::Vec3::from(m.positions[tri[j] as usize]));
+            let face = (p[1] - p[0]).cross(p[2] - p[0]);
+            let shading: glam::Vec3 = (0..3).map(|j| glam::Vec3::from(m.normals[tri[j] as usize])).sum();
+            if face.dot(shading) < 0.0 {
+                report.inverted_normals += 1;
             }
             for j in 0..3 {
                 let (a, b) = (w[j], w[(j + 1) % 3]);
@@ -316,6 +326,17 @@ mod tests {
         assert_eq!(report.overlapping_vertices, 2);
         assert_eq!(marks[0].overlapping.len(), 2);
         assert_eq!(report.degenerate_faces, 1);
+    }
+
+    #[test]
+    fn inverted_normals_are_counted() {
+        let (p, i) = tetra();
+        let mut m = mesh(p, i);
+        assert_eq!(analyze(std::slice::from_ref(&m)).0.inverted_normals, 0);
+        for n in &mut m.normals {
+            *n = n.map(|c| -c);
+        }
+        assert_eq!(analyze(&[m]).0.inverted_normals, 4);
     }
 
     #[test]
