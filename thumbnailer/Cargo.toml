@@ -1,0 +1,29 @@
+[package]
+name = "polyloupe-thumbs"
+version = "0.1.0"
+edition = "2024"
+description = "Windows Explorer thumbnail handler for Poly Loupe"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "polyloupe_thumbs"
+crate-type = ["cdylib"]
+
+[dependencies]
+windows-core = "0.62"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_SystemServices",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_Shell_PropertiesSystem",
+] }
+
+[dev-dependencies]
+# Only the probe example saves PNGs; the DLL itself stays free of image decoders.
+image = { version = "0.25", default-features = false, features = ["png"] }

@@ -1,0 +1,43 @@
+# Blender 5.2.2 LTS MTL File: 'None'
+# www.blender.org
+
+newmtl Brick
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd textures/brick_basecolor.png
+map_Ns textures/brick_roughness.png
+map_Bump -bm 1.000000 textures/brick_normal.png
+
+newmtl Glass
+Ns 902.500000
+Ka 1.000000 1.000000 1.000000
+Kd 0.500000 0.800000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 0.350000
+illum 9
+
+newmtl Scratched_Metal
+Ka 1.000000 1.000000 1.000000
+Kd 0.900000 0.900000 0.920000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 3
+map_Ns textures/metal_roughness.png
+
+newmtl Vertex_Paint
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Kd 0.800000 0.800000 0.800000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2

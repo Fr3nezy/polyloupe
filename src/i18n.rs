@@ -1,0 +1,453 @@
+//! UI translations.
+//!
+//! Strings are written in English in the code and looked up with [`tr`] (plain text) or [`trf`]
+//! (text with `{name}` placeholders). English is the key, so a missing translation simply shows
+//! the English text. Technical terms artists know from Blender (Wireframe, Solid, MatCap,
+//! X-Ray, Base Color...) stay in English on purpose.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Language {
+    /// Follow the Windows display language.
+    System,
+    English,
+    Italian,
+}
+
+impl Language {
+    pub const ALL: [Language; 3] = [Language::System, Language::English, Language::Italian];
+
+    /// Each language is named in itself, so it can be found whatever the current one is.
+    pub fn label(self) -> String {
+        match self {
+            Language::System => {
+                let name = if system_is_italian() { "Italiano" } else { "English" };
+                format!("{} ({name})", tr("System"))
+            }
+            Language::English => "English".into(),
+            Language::Italian => "Italiano".into(),
+        }
+    }
+}
+
+static ITALIAN: AtomicBool = AtomicBool::new(false);
+
+pub fn set(language: Language) {
+    let italian = match language {
+        Language::System => system_is_italian(),
+        Language::English => false,
+        Language::Italian => true,
+    };
+    ITALIAN.store(italian, Ordering::Relaxed);
+}
+
+fn system_is_italian() -> bool {
+    sys_locale::get_locale().is_some_and(|l| l.to_ascii_lowercase().starts_with("it"))
+}
+
+pub fn italian() -> bool {
+    ITALIAN.load(Ordering::Relaxed)
+}
+
+/// Integer with the language's thousands separator (1,234 / 1.234).
+pub fn thousands(n: usize) -> String {
+    let sep = if italian() { '.' } else { ',' };
+    let s = n.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(sep);
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Decimal number text with the language's decimal separator.
+pub fn decimal(text: String) -> String {
+    if italian() { text.replace('.', ",") } else { text }
+}
+
+/// Translates `en`; anything without a translation (file names, numbers) passes through.
+pub fn tr(en: &str) -> &str {
+    if ITALIAN.load(Ordering::Relaxed) { italian_text(en).unwrap_or(en) } else { en }
+}
+
+/// Translates `template`, then fills `{name}` placeholders.
+pub fn trf(template: &str, args: &[(&str, &dyn std::fmt::Display)]) -> String {
+    let mut out = tr(template).to_string();
+    for (name, value) in args {
+        out = out.replace(&format!("{{{name}}}"), &value.to_string());
+    }
+    out
+}
+
+fn italian_text(en: &str) -> Option<&'static str> {
+    Some(match en {
+        // Blender terms, kept in English on purpose.
+        "V-Sync" => "V-Sync",
+        "Wireframe" => "Wireframe",
+        "X-Ray" => "X-Ray",
+        "Alpha" => "Alpha",
+        "Backface culling" => "Backface culling",
+        "Outliner" => "Outliner",
+
+        // Menus
+        "File" => "File",
+        "Edit" => "Modifica",
+        "View" => "Vista",
+        "Select" => "Seleziona",
+        "Help" => "Aiuto",
+        "Open…" => "Apri…",
+        "Open Recent" => "Apri recenti",
+        "Clear Recent Files" => "Cancella file recenti",
+        "Load HDRI Environment…" => "Carica ambiente HDRI…",
+        "Export Image…" => "Esporta immagine…",
+        "Quit" => "Esci",
+        "Preferences…" => "Preferenze…",
+        "Sidebar" => "Barra laterale",
+        "Frame All" => "Inquadra tutto",
+        "Frame Selected" => "Inquadra selezione",
+        "Perspective" => "Prospettiva",
+        "Orthographic" => "Ortografica",
+        "Auto Perspective" => "Prospettiva automatica",
+        "Toggle Fullscreen" => "Schermo intero",
+        "All" => "Tutto",
+        "None" => "Niente",
+        "Hide Selected" => "Nascondi selezionati",
+        "Hide Unselected" => "Nascondi non selezionati",
+        "Reveal Hidden" => "Mostra nascosti",
+
+        // Help
+        "Navigation" => "Navigazione",
+        "Orbit" => "Orbita",
+        "Pan" => "Sposta",
+        "Zoom" => "Zoom",
+        "Frame all" => "Inquadra tutto",
+        "Frame selected" => "Inquadra selezione",
+        "Front / Right / Top (opposite)" => "Fronte / destra / alto (opposto)",
+        "Orbit in steps" => "Orbita a scatti",
+        "Perspective / Orthographic" => "Prospettiva / ortografica",
+        "Selection" => "Selezione",
+        "Select / extend" => "Seleziona / estendi",
+        "Select all / none" => "Seleziona tutto / niente",
+        "Hide / hide others / reveal" => "Nascondi / nascondi altri / mostra",
+        "Sidebar with outliner" => "Barra laterale con outliner",
+        "Animation" => "Animazione",
+        "Play / pause" => "Riproduci / pausa",
+        "Previous / next frame" => "Frame precedente / successivo",
+        "Jump to start / end" => "Vai all'inizio / alla fine",
+        "Shading" => "Shading",
+        "Shading pie menu" => "Menu a torta dello shading",
+        "Toggle wireframe" => "Attiva/disattiva wireframe",
+        "Toggle X-ray" => "Attiva/disattiva X-ray",
+        "Toggle overlays" => "Attiva/disattiva overlay",
+        "Export image" => "Esporta immagine",
+        "Wheel" => "Rotella",
+        "Space" => "Spazio",
+
+        // Status bar, overlays, empty state
+        "Preparing lighting…" => "Preparo l'illuminazione…",
+        "{tris} tris · loaded in {ms} ms" => "{tris} tri · caricato in {ms} ms",
+        "Drop a 3D file here" => "Trascina qui un file 3D",
+        "Open File…" => "Apri file…",
+        "Recent" => "Recenti",
+        "Dismiss" => "Chiudi",
+        "Opening {name}…" => "Apertura di {name}…",
+        "Drop to open" => "Rilascia per aprire",
+        "Objects" => "Oggetti",
+        "Vertices" => "Vertici",
+        "Triangles" => "Triangoli",
+        "Size" => "Dimensioni",
+        "Grid" => "Griglia",
+        "{view} {projection}" => "{projection} {view}",
+        "User" => "utente",
+        "Front" => "Frontale",
+        "Back" => "Posteriore",
+        "Right" => "Destra",
+        "Left" => "Sinistra",
+        "Top" => "Superiore",
+        "Bottom" => "Inferiore",
+
+        // Files and messages
+        "Open 3D file" => "Apri file 3D",
+        "3D models" => "Modelli 3D",
+        "Load HDRI environment" => "Carica ambiente HDRI",
+        "This file" => "Questo file",
+        "{ext} isn't supported yet. Supported: glTF, GLB, FBX, OBJ, STL, and .hdr / .exr environments." => {
+            "{ext} non è ancora supportato. Supportati: glTF, GLB, FBX, OBJ, STL e ambienti .hdr / .exr."
+        }
+        "Couldn't open {name}: {error}" => "Impossibile aprire {name}: {error}",
+        "{first} (+{more} more)" => "{first} (+{more} altri)",
+        "Missing texture: {name}" => "Texture mancante: {name}",
+        "Couldn't decode texture {name}: {error}" => "Impossibile decodificare la texture {name}: {error}",
+        "Save image" => "Salva immagine",
+        "PNG image" => "Immagine PNG",
+        "Saved {name}" => "Salvata {name}",
+        "Couldn't save the image: {error}" => "Impossibile salvare l'immagine: {error}",
+        "Couldn't render the image" => "Impossibile renderizzare l'immagine",
+
+        // Header
+        "Channel" => "Canale",
+        "All objects" => "Tutti gli oggetti",
+        "1 selected object" => "1 oggetto selezionato",
+        "{n} selected objects" => "{n} oggetti selezionati",
+        "Show overlays (Shift Alt Z)" => "Mostra overlay (Shift Alt Z)",
+        "Overlay options" => "Opzioni overlay",
+        "Toggle X-ray (Alt Z)" => "Attiva/disattiva X-ray (Alt Z)",
+        "{mode}  ·  Z for the pie menu" => "{mode}  ·  Z per il menu a torta",
+        "Shading settings: they change with the mode (panel on the right)" => {
+            "Impostazioni shading: cambiano con la modalità (pannello a destra)"
+        }
+        "Mode" => "Modalità",
+        "The options below change with the mode." => "Le opzioni qui sotto cambiano con la modalità.",
+        "Sidebar with outliner (N)" => "Barra laterale con outliner (N)",
+
+        // Sidebar
+        "Open a file to see its objects." => "Apri un file per vederne gli oggetti.",
+        "{n} objects" => "{n} oggetti",
+        "Object" => "Oggetto",
+        "Dimensions" => "Dimensioni",
+        "Material" => "Materiale",
+        "Texture Maps" => "Mappe texture",
+        "Hide (H)" => "Nascondi (H)",
+        "Show (Alt H)" => "Mostra (Alt H)",
+        "{name}\nClick to select · Shift/Ctrl to extend · Double-click to frame" => {
+            "{name}\nClic per selezionare · Shift/Ctrl per estendere · doppio clic per inquadrare"
+        }
+        "{name}\n{w} × {h}\nClick to show this channel on the object (again to turn it off)" => {
+            "{name}\n{w} × {h}\nClic per mostrare questo canale sull'oggetto (di nuovo per spegnerlo)"
+        }
+
+        // Popovers
+        "Viewport Overlays" => "Overlay della vista",
+        "Floor grid" => "Griglia a pavimento",
+        "Axes" => "Assi",
+        "Statistics" => "Statistiche",
+        "Navigation gizmo" => "Gizmo di navigazione",
+        "Performance" => "Prestazioni",
+        "Off: frames aren't capped to the monitor refresh rate" => {
+            "Spento: i frame non sono limitati alla frequenza del monitor"
+        }
+        "Frame rate" => "Frame rate",
+        "Redraws continuously and shows FPS in the status bar" => {
+            "Ridisegna di continuo e mostra gli FPS nella barra di stato"
+        }
+        "Wireframe Color" => "Colore wireframe",
+        "Theme" => "Tema",
+        "Random" => "Casuale",
+        "Options" => "Opzioni",
+        "Outline" => "Contorno",
+        "Lighting" => "Illuminazione",
+        "Flat" => "Piatta",
+        "Color" => "Colore",
+        "Single" => "Singolo",
+        "Attribute" => "Attributo",
+        "Texture: image maps and their passes · Attribute: vertex colors" => {
+            "Texture: mappe immagine e loro canali · Attributo: colori dei vertici"
+        }
+        "Object color" => "Colore oggetto",
+        "Pass" => "Canale",
+        "Lit with the current lighting" => "Illuminato con la luce corrente",
+        "Raw values, unlit (like Blender's Non-Color)" => "Valori grezzi, senza luce (come Non-Color di Blender)",
+        "Environment" => "Ambiente",
+        "Forest" => "Foresta",
+        "Sunset" => "Tramonto",
+        "Load HDRI…" => "Carica HDRI…",
+        "or drop a .hdr / .exr" => "o trascina un .hdr / .exr",
+        "Right-click for options" => "Clic destro per le opzioni",
+        "Use as default" => "Usa come predefinito",
+        "Remove from list" => "Rimuovi dall'elenco",
+        "Default environment" => "Ambiente predefinito",
+        "Rotation" => "Rotazione",
+        "Strength" => "Intensità",
+        "World background" => "Sfondo del mondo",
+        "Blur" => "Sfocatura",
+        "Color Management" => "Gestione colore",
+        "Exposure" => "Esposizione",
+        "Applies to: {target}" => "Si applica a: {target}",
+        "Click again for material colors" => "Clicca di nuovo per i colori materiale",
+        "C / Shift C: next / previous channel" => "C / Shift C: canale successivo / precedente",
+        "Reset ({n})" => "Azzera ({n})",
+        "Remove channel overrides from every object" => "Rimuovi i canali impostati su ogni oggetto",
+
+        // Timeline
+        "Jump to start (Shift ←)" => "Vai all'inizio (Shift ←)",
+        "Previous frame (←)" => "Frame precedente (←)",
+        "Pause (Space)" => "Pausa (Spazio)",
+        "Play (Space)" => "Riproduci (Spazio)",
+        "Next frame (→)" => "Frame successivo (→)",
+        "Jump to end (Shift →)" => "Vai alla fine (Shift →)",
+        "Animation clip" => "Clip di animazione",
+        "{seconds} s at {fps} fps" => "{seconds} s a {fps} fps",
+        "Playback speed" => "Velocità di riproduzione",
+        "Loop" => "Ripeti",
+
+        // Pie menu and gizmo
+        "Toggle X-Ray" => "Attiva/disattiva X-Ray",
+        "{view} view" => "Vista {view}",
+        "Drag to orbit · click an axis to align the view" => {
+            "Trascina per orbitare · clic su un asse per allineare la vista"
+        }
+        "Zoom · drag up/down" => "Zoom · trascina su/giù",
+        "Pan · drag" => "Sposta · trascina",
+        "Switch to perspective (Numpad 5)" => "Passa in prospettiva (Numpad 5)",
+        "Switch to orthographic (Numpad 5)" => "Passa in ortografica (Numpad 5)",
+
+        // Poly Loupe shell: title bar, tools, inspector, footer, empty state
+        "Inspector" => "Pannello",
+        "Inspector (N)" => "Pannello (N)",
+        "Select (Q)" => "Seleziona (Q)",
+        "Orbit (O)" => "Orbita (O)",
+        "Pan (G)" => "Sposta (G)",
+        "Zoom (drag up/down)" => "Zoom (trascina su/giù)",
+        "Select / orbit / pan tool" => "Strumento seleziona / orbita / sposta",
+        "Solid" => "Solido",
+        "Rendered" => "Renderizzato",
+        "Frame the model (Home)" => "Inquadra il modello (Home)",
+        "Perspective / Orthographic (5)" => "Prospettiva / ortografica (5)",
+        "{objects} objects · {tris} tris · {verts} verts" => "{objects} oggetti · {tris} tri · {verts} vertici",
+        "{n} textures not found" => "{n} texture non trovate",
+        "{n} textures not found. The model is shown without them." => {
+            "{n} texture non trovate. Il modello è mostrato senza."
+        }
+        "Fix" => "Risolvi",
+        "Info" => "Info",
+        "Materials" => "Materiali",
+        "Scene" => "Scena",
+        "Geometry" => "Geometria",
+        "X, width" => "X, larghezza",
+        "Y, depth" => "Y, profondità",
+        "Z, height" => "Z, altezza",
+        "Name" => "Nome",
+        "Projection" => "Proiezione",
+        "Loaded in" => "Caricato in",
+        "{ms} ms" => "{ms} ms",
+        "{n} textures weren't found next to the file. Point to the folder that has them." => {
+            "{n} texture non trovate accanto al file. Indica la cartella che le contiene."
+        }
+        "Choose texture folder…" => "Scegli cartella texture…",
+        "Choose texture folder" => "Scegli cartella texture",
+        "Missing" => "Mancanti",
+        "MISSING" => "MANCA",
+        "No textures: plain material color." => "Nessuna texture: colore del materiale.",
+        "Click to show this channel on the object (again to turn it off)" => {
+            "Clic per mostrare questo canale sull'oggetto (di nuovo per spegnerlo)"
+        }
+        "{n} tri" => "{n} tri",
+        "{tris} tris" => "{tris} tri",
+        "loaded in {ms} ms" => "caricato in {ms} ms",
+        "No file open" => "Nessun file aperto",
+        "Drop a model here" => "Trascina qui un modello",
+        "or open it from disk. Textures are looked up in the same folder." => {
+            "oppure aprilo dal disco. Le texture vengono cercate nella stessa cartella."
+        }
+
+        // Navigation presets
+        "Style" => "Stile",
+        "Look around" => "Guarda intorno",
+        "Fly" => "Vola",
+        "Fly (Shift faster)" => "Vola (Shift più veloce)",
+        "Snap to the nearest view" => "Aggancia alla vista più vicina",
+        "Shift while rotating" => "Shift mentre ruoti",
+        "LMB  /  RMB drag" => "LMB  /  RMB trascina",
+        "RMB drag" => "RMB trascina",
+        "Welcome to Poly Loupe" => "Benvenuto in Poly Loupe",
+        "How do you move around in 3D? Pick the app your hands already know; you can change it later in Preferences." => {
+            "Come ti muovi in 3D? Scegli l'app che le tue mani conoscono già; puoi cambiarla dopo nelle Preferenze."
+        }
+        "Start" => "Inizia",
+
+        // Preferences
+        "Preferences" => "Preferenze",
+        "Interface" => "Interfaccia",
+        "Language" => "Lingua",
+        "System" => "Sistema",
+        "Files" => "File",
+        "Open files in the same window" => "Apri i file nella stessa finestra",
+        "Opening a file from Explorer loads it in the window that's already open instead of starting a new one" => {
+            "Aprire un file da Esplora file lo carica nella finestra già aperta invece di avviarne una nuova"
+        }
+        "Choose file types…" => "Scegli i tipi di file…",
+        "Opens Windows Default apps, where Poly Loupe can open .glb, .gltf, .fbx, .obj and .stl" => {
+            "Apre App predefinite di Windows, dove Poly Loupe può aprire .glb, .gltf, .fbx, .obj e .stl"
+        }
+        "Viewport" => "Vista 3D",
+        "Image Export" => "Esportazione immagine",
+        "Resolution" => "Risoluzione",
+        "Multiplies the viewport size, up to 4096 px on the long side" => {
+            "Moltiplica la dimensione della vista, fino a 4096 px sul lato lungo"
+        }
+        "Transparent background" => "Sfondo trasparente",
+        "Include the floor grid" => "Includi la griglia a pavimento",
+        "Close" => "Chiudi",
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every literal passed to `tr(...)` / `trf(...)` in the sources has an Italian entry.
+    #[test]
+    fn every_key_is_translated() {
+        let mut missing = Vec::new();
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
+        for path in rust_files(std::path::Path::new(dir)) {
+            let text = std::fs::read_to_string(&path).unwrap();
+            for key in literal_args(&text) {
+                if italian_text(&key).is_none() {
+                    missing.push(format!("{}: {key:?}", path.display()));
+                }
+            }
+        }
+        assert!(missing.is_empty(), "missing Italian translations:\n{}", missing.join("\n"));
+    }
+
+    fn rust_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                out.extend(rust_files(&path));
+            } else if path.extension().is_some_and(|e| e == "rs") && !path.ends_with("i18n.rs") {
+                out.push(path);
+            }
+        }
+        out
+    }
+
+    /// String literals right after `tr(` or `trf(`, unescaped.
+    fn literal_args(text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for pattern in ["tr(\"", "trf(\""] {
+            let mut rest = text;
+            while let Some(i) = rest.find(pattern) {
+                let prev = rest[..i].chars().last();
+                rest = &rest[i + pattern.len()..];
+                if prev.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                    continue;
+                }
+                let mut key = String::new();
+                let mut chars = rest.chars();
+                while let Some(c) = chars.next() {
+                    match c {
+                        '"' => break,
+                        '\\' => match chars.next() {
+                            Some('n') => key.push('\n'),
+                            Some(other) => key.push(other),
+                            None => {}
+                        },
+                        c => key.push(c),
+                    }
+                }
+                out.push(key);
+            }
+        }
+        out
+    }
+}

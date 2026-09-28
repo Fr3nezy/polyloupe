@@ -1,0 +1,39 @@
+[package]
+name = "polyloupe"
+version = "0.1.0"
+edition = "2024"
+description = "Fast, native 3D model viewer with a Blender-style viewport"
+license = "MIT OR Apache-2.0"
+
+[workspace]
+members = [".", "thumbnailer"]
+
+[dependencies]
+base64 = "0.23.1"
+bytemuck = { version = "1.25.2", features = ["derive"] }
+eframe = { version = "0.36.2", default-features = false, features = ["wgpu", "default_fonts", "accesskit", "persistence"] }
+env_logger = "0.11.11"
+glam = "0.33.10"
+gltf = "1.4.1"
+image = { version = "0.25", default-features = false, features = ["bmp", "exr", "hdr", "jpeg", "png", "tga"] }
+log = "0.4.34"
+mikktspace = "0.3.0"
+pollster = "1"
+rfd = "0.17.2"
+serde = { version = "1.0.229", features = ["derive"] }
+stl_io = "0.11.0"
+sys-locale = "0.3"
+ufbx = "0.11.5"
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+# Parsers are the hot path when opening big files: keep dependencies optimized
+# even in debug builds so iteration stays fast.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
