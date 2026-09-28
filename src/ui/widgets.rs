@@ -253,7 +253,17 @@ pub fn stat_card(ui: &mut Ui, value: &str, caption: &str, width: f32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 58.0), Sense::hover());
     let p = ui.painter();
     p.rect_filled(rect, radius(), theme::SURFACE);
-    p.text(rect.left_top() + Vec2::new(12.0, 10.0), egui::Align2::LEFT_TOP, value, theme::medium(22.0), theme::TEXT);
+    // Big counts ("4.030.464") shrink to fit the card instead of being cut off.
+    let room = width - 24.0;
+    let mut size = 22.0;
+    let mut galley = p.layout_no_wrap(value.to_string(), theme::medium(size), theme::TEXT);
+    if galley.size().x > room {
+        size = (size * room / galley.size().x).floor().max(12.0);
+        galley = p.layout_no_wrap(value.to_string(), theme::medium(size), theme::TEXT);
+    }
+    // Keep the baseline where the 22 px text sits.
+    let y = rect.top() + 10.0 + (theme::medium(22.0).size - size) * 0.8;
+    p.with_clip_rect(rect.shrink(1.0)).galley(egui::pos2(rect.left() + 12.0, y), galley, theme::TEXT);
     p.text(rect.left_bottom() + Vec2::new(12.0, -10.0), egui::Align2::LEFT_BOTTOM, tr(caption), egui::FontId::proportional(12.0), theme::TEXT_DIM);
 }
 
