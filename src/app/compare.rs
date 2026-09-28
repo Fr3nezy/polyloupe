@@ -56,10 +56,10 @@ impl ViewerApp {
 
     pub(super) fn poll_compare(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
         if let Some(c) = &mut self.compare {
-            if let Some(Ok((report, instances, _))) = c.qa_rx.as_ref().map(|rx| rx.try_recv()) {
+            if let Some(Ok(result)) = c.qa_rx.as_ref().map(|rx| rx.try_recv()) {
                 c.qa_rx = None;
-                c.renderer.set_markers(&instances);
-                c.info.qa = Some(report);
+                c.renderer.set_markers(&result.markers);
+                c.info.qa = Some(result.report);
             }
         }
         let Some(loading) = &self.compare_loading else { return };

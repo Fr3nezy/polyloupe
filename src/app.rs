@@ -15,6 +15,7 @@ use eframe::egui_wgpu;
 
 mod compare;
 mod shell;
+mod uv_pane;
 
 use crate::anim::AnimPlayer;
 use crate::camera::{AxisView, Camera};
@@ -89,7 +90,12 @@ impl Default for Section {
 }
 
 /// Mesh analysis totals, marker instances and snapping data, per mesh.
-type QaResult = (qa::Report, Vec<Vec<render::MarkerInstance>>, Vec<snap::SnapMesh>);
+struct QaResult {
+    report: qa::Report,
+    markers: Vec<Vec<render::MarkerInstance>>,
+    snap: Vec<snap::SnapMesh>,
+    uv: crate::uv::UvData,
+}
 
 /// What a GPU pick is for.
 #[derive(Clone, Copy)]
@@ -220,6 +226,11 @@ pub struct ViewerApp {
     compare_loading: Option<Loading>,
     /// Last environment loaded, so a comparison model can light with it too.
     env_image: Option<EnvImage>,
+    /// UV layouts of model A (arrive with the mesh analysis) and the UV pane's state.
+    uv: Option<std::sync::Arc<crate::uv::UvData>>,
+    uv_view: uv_pane::UvView,
+    /// Viewport before the UV pane takes its part.
+    viewport_full_rect: Rect,
     env_loaded: Option<Environment>,
     env_loading: Option<(Environment, Receiver<Result<EnvImage, String>>)>,
     capture: Option<CaptureState>,
@@ -295,6 +306,9 @@ impl ViewerApp {
             compare: None,
             compare_loading: None,
             env_image: None,
+            uv: None,
+            uv_view: uv_pane::UvView::default(),
+            viewport_full_rect: Rect::NOTHING,
             env_loaded: None,
             env_loading: None,
             capture: launch.capture.map(|opts| CaptureState { opts, frames: 0, requested: false }),
@@ -624,6 +638,8 @@ impl ViewerApp {
         self.cancel_measure();
         self.snap.clear();
         self.section = None;
+        self.uv = None;
+        self.uv_view.reset();
         self.visible = vec![true; n];
         self.pass_override = vec![None; n];
         let missing_count = info.missing.len();
@@ -716,9 +732,10 @@ impl ViewerApp {
 
     fn poll_qa(&mut self) {
         let Some(rx) = &self.qa_rx else { return };
-        let Ok((report, instances, snap)) = rx.try_recv() else { return };
+        let Ok(QaResult { report, markers: instances, snap, uv }) = rx.try_recv() else { return };
         self.qa_rx = None;
         self.snap = snap;
+        self.uv = Some(std::sync::Arc::new(uv));
         if let Some(r) = &mut self.renderer {
             r.set_markers(&instances);
         }
@@ -1019,6 +1036,9 @@ impl ViewerApp {
         if pressed(Modifiers::NONE, Key::C) {
             self.cycle_channel(true);
         }
+        if self.info.is_some() && pressed(Modifiers::NONE, Key::U) {
+            self.uv_view.open = !self.uv_view.open;
+        }
         // Measure: Esc drops the point being placed, Delete clears every measurement.
         if self.measure_start.is_some() && pressed(Modifiers::NONE, Key::Escape) {
             self.cancel_measure();
@@ -1226,7 +1246,9 @@ impl ViewerApp {
     // --- Layout -----------------------------------------------------------------------------
 
     fn viewport(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
-        let rect = ui.max_rect();
+        let full = ui.max_rect();
+        self.viewport_full_rect = full;
+        let (rect, uv_rect) = self.uv_split(full);
         self.viewport_rect = rect;
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
         let ctx = ui.ctx().clone();
@@ -1274,6 +1296,9 @@ impl ViewerApp {
             }
         }
 
+        if let Some(uv_rect) = uv_rect {
+            self.uv_pane(ui, uv_rect);
+        }
         let hovering_files = ctx.input(|i| !i.raw.hovered_files.is_empty());
         if hovering_files {
             shell::drop_overlay(ui, rect, self.info.is_some());
@@ -1415,6 +1440,9 @@ impl ViewerApp {
             }
             if cap.opts.pie {
                 self.pie.open(ctx.content_rect().center(), ctx.input(|i| i.time));
+            }
+            if cap.opts.uv {
+                self.uv_view.open = true;
             }
             if let Some(path) = cap.opts.compare.clone() {
                 pending_compare = Some(path);
@@ -1640,9 +1668,10 @@ fn spawn_analysis(scene: Scene, ctx: &egui::Context) -> Receiver<QaResult> {
         let started = Instant::now();
         let (report, marks) = qa::analyze(&scene.meshes);
         log::info!("mesh analysis in {:?}: {report:?}", started.elapsed());
-        let instances = scene.meshes.iter().zip(&marks).map(|(m, k)| render::marker_instances(m, k)).collect();
+        let markers = scene.meshes.iter().zip(&marks).map(|(m, k)| render::marker_instances(m, k)).collect();
+        let uv = crate::uv::extract(&scene.meshes, &scene.materials, &scene.images);
         let snap = scene.meshes.into_iter().map(|m| snap::SnapMesh::new(m.transform, m.positions)).collect();
-        if tx.send((report, instances, snap)).is_ok() {
+        if tx.send(QaResult { report, markers, snap, uv }).is_ok() {
             ctx.request_repaint();
         }
     });
