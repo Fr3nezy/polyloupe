@@ -231,6 +231,15 @@ pub fn move_arrows(p: &Painter, rect: Rect, color: Color32) {
 }
 
 /// Zoom tool: magnifier with a plus.
+/// Cross-section: a box cut in half, the cut face filled.
+pub fn section(p: &Painter, rect: Rect, color: Color32) {
+    let g = grid(rect, 18.0);
+    let s = stroke_for(rect, 18.0, 1.5, color);
+    p.add(Shape::closed_line(vec![g(3.0, 3.0), g(15.0, 3.0), g(15.0, 15.0), g(3.0, 15.0)], s));
+    p.add(Shape::convex_polygon(vec![g(3.0, 15.0), g(15.0, 3.0), g(15.0, 15.0)], color.gamma_multiply(0.45), Stroke::NONE));
+    p.line_segment([g(3.0, 15.0), g(15.0, 3.0)], s);
+}
+
 /// Diagonal ruler with tick marks.
 pub fn ruler(p: &Painter, rect: Rect, color: Color32) {
     let g = grid(rect, 18.0);

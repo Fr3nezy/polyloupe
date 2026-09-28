@@ -26,7 +26,13 @@ struct Globals {
     viewport: vec4<f32>,
     // Mesh analysis markers shown: x non-manifold edges, y open edges, z overlapping vertices.
     markers: vec4<u32>,
+    // Section plane: xyz normal (zero when off), w offset. Points with dot(n, p) > w are cut.
+    section: vec4<f32>,
 };
+
+fn section_cuts(world_pos: vec3<f32>) -> bool {
+    return dot(g.section.xyz, g.section.xyz) > 0.0 && dot(g.section.xyz, world_pos) > g.section.w;
+}
 
 const PI: f32 = 3.14159265;
 

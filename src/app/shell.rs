@@ -26,6 +26,8 @@ pub(super) enum Tool {
     Zoom,
     /// Click two surface points to measure the distance between them.
     Measure,
+    /// Drag to slide the section plane.
+    Section,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -306,9 +308,13 @@ impl ViewerApp {
                 (Tool::Pan, icons::move_arrows, "Pan (G)"),
                 (Tool::Zoom, icons::magnifier, "Zoom (drag up/down)"),
                 (Tool::Measure, icons::ruler, "Measure (M)"),
+                (Tool::Section, icons::section, "Section"),
             ] {
                 if tool_button(ui, icon, self.tool == tool).on_hover_text(tr(tip)).clicked() {
                     self.tool = tool;
+                    if tool == Tool::Section && self.section.is_none() {
+                        self.section = Some(Section::default());
+                    }
                 }
             }
         });
@@ -614,6 +620,87 @@ impl ViewerApp {
             let square = Rect::from_center_size(at, Vec2::splat(12.0));
             painter.rect_stroke(square, CornerRadius::ZERO, Stroke::new(4.0, shadow), egui::StrokeKind::Middle);
             painter.rect_stroke(square, CornerRadius::ZERO, Stroke::new(2.0, theme::TEXT), egui::StrokeKind::Middle);
+        }
+    }
+
+    /// Outline of the section plane across the scene bounds.
+    pub(super) fn draw_section(&self, ui: &Ui, viewport: Rect) {
+        let (Some(s), Some(plane)) = (self.section, self.section_plane()) else { return };
+        let b = self.scene_bounds();
+        let at = plane[3] * plane[s.axis];
+        let (u, v) = ((s.axis + 1) % 3, (s.axis + 2) % 3);
+        let corner = |cu: f32, cv: f32| {
+            let mut p = Vec3::ZERO;
+            p[s.axis] = at;
+            p[u] = cu;
+            p[v] = cv;
+            p
+        };
+        let corners = [corner(b.min[u], b.min[v]), corner(b.max[u], b.min[v]), corner(b.max[u], b.max[v]), corner(b.min[u], b.max[v])];
+        let aspect = viewport.width() / viewport.height().max(1.0);
+        let view_proj = self.camera.projection(aspect) * self.camera.view_matrix();
+        let project = |p: Vec3| {
+            let c = view_proj * p.extend(1.0);
+            (c.w > 1e-6).then(|| {
+                let n = c.truncate() / c.w;
+                pos2(viewport.left() + (n.x * 0.5 + 0.5) * viewport.width(), viewport.top() + (0.5 - n.y * 0.5) * viewport.height())
+            })
+        };
+        let Some(points) = corners.iter().map(|&c| project(c)).collect::<Option<Vec<Pos2>>>() else { return };
+        let painter = ui.painter().with_clip_rect(viewport);
+        let color = theme::SECTION;
+        let mut closed = points.clone();
+        closed.push(points[0]);
+        painter.extend(egui::Shape::dashed_line(&closed, Stroke::new(1.5, color), 8.0, 5.0));
+    }
+
+    /// Axis, position, flip and close for the cross-section, docked at the bottom of the view.
+    pub(super) fn section_bar(&mut self, ctx: &egui::Context, viewport: Rect) {
+        let Some(mut s) = self.section else { return };
+        let b = self.scene_bounds();
+        let mut close = false;
+        egui::Area::new(Id::new("section_bar"))
+            .order(Order::Middle)
+            .fixed_pos(pos2(viewport.center().x, viewport.bottom() - 12.0))
+            .pivot(Align2::CENTER_BOTTOM)
+            .show(ctx, |ui| {
+                toolbar(ui, |ui| {
+                    ui.add_space(6.0);
+                    let (r, _) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
+                    icons::section(ui.painter(), r, theme::SECTION);
+                    ui.label(theme::caps(tr("Section"), 11.0, theme::TEXT_DIM));
+                    toolbar_separator(ui);
+                    for (axis, label) in [(0, "X"), (1, "Y"), (2, "Z")] {
+                        if text_button(ui, label, s.axis == axis).on_hover_text(tr("Cut across this axis")).clicked() {
+                            s.axis = axis;
+                        }
+                    }
+                    toolbar_separator(ui);
+                    ui.spacing_mut().slider_width = 180.0;
+                    ui.add(egui::Slider::new(&mut s.t, 0.0..=1.0).show_value(false))
+                        .on_hover_text(tr("Drag in the view with the Section tool to move it"));
+                    let extent = b.max[s.axis] - b.min[s.axis];
+                    let at = b.min[s.axis] + extent * s.t;
+                    // Float noise around the origin reads as "0,01 µm": show a clean zero.
+                    let at = if at.abs() < extent * 1e-4 { 0.0 } else { at };
+                    let (r, _) = ui.allocate_exact_size(vec2(64.0, theme::TOOLBAR_HEIGHT), Sense::hover());
+                    ui.painter().text(r.left_center(), Align2::LEFT_CENTER, fmt_len(at), theme::mono(12.0), theme::TEXT);
+                    toolbar_separator(ui);
+                    if text_button(ui, "Flip", s.flip).on_hover_text(tr("Keep the other side")).clicked() {
+                        s.flip = !s.flip;
+                    }
+                    close = widgets::sized_icon_button(ui, icons::close, false, Vec2::splat(theme::TOOLBAR_HEIGHT))
+                        .on_hover_text(tr("Turn the section off"))
+                        .clicked();
+                });
+            });
+        if close {
+            self.section = None;
+            if self.tool == Tool::Section {
+                self.tool = Tool::Select;
+            }
+        } else {
+            self.section = Some(s);
         }
     }
 
@@ -1067,7 +1154,13 @@ impl ViewerApp {
     pub(super) fn footer(&mut self, ui: &mut Ui) {
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
-            if self.info.is_some() && self.tool == Tool::Measure {
+            if self.info.is_some() && self.tool == Tool::Section {
+                widgets::hint(ui, &["LMB"], "Drag the plane");
+                for (keys, action) in self.settings.navigation.hints() {
+                    widgets::hint(ui, keys, action);
+                }
+                widgets::hint(ui, &["Q"], "Back to select");
+            } else if self.info.is_some() && self.tool == Tool::Measure {
                 widgets::hint(ui, &["LMB"], if self.measure_start.is_some() { "Second point" } else { "First point" });
                 if self.measure_start.is_some() {
                     widgets::hint(ui, &["Esc"], "Cancel point");

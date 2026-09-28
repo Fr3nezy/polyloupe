@@ -56,6 +56,7 @@ struct GlobalsUniform {
     active_color: [f32; 4],
     viewport: [f32; 4],
     markers: [u32; 4],
+    section: [f32; 4],
 }
 
 /// One mesh analysis marker (see `qa`): an edge from `a` to `b`, or a vertex at `a`.
@@ -140,6 +141,8 @@ pub struct FrameInput<'a> {
     pub pick: Option<[u32; 2]>,
     /// Clear to transparent instead of the viewport color (thumbnails).
     pub transparent: bool,
+    /// Section plane (normal, offset): geometry on the normal's side is cut away.
+    pub section: Option<[f32; 4]>,
 }
 
 struct GpuMesh {
@@ -984,6 +987,7 @@ impl Renderer {
             active_color: ACTIVE,
             viewport: [size[0] as f32, size[1] as f32, 1.0 / size[0] as f32, 1.0 / size[1] as f32],
             markers: [s.show_non_manifold as u32, s.show_open_edges as u32, s.show_overlapping as u32, 0],
+            section: input.section.unwrap_or([0.0; 4]),
         };
         self.queue.write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
 
@@ -1072,7 +1076,9 @@ impl Renderer {
             let uses_blend = !wire_mode && !xray;
             let opaque = (0..self.meshes.len())
                 .filter(|&i| !(uses_blend && self.material_blend[self.meshes[i].material]));
-            let surf = &self.pipes.surfaces[(s.backface_culling && !wire_mode) as usize];
+            // A section shows the inside through back faces, so it turns culling off.
+            let cull = s.backface_culling && !wire_mode && input.section.is_none();
+            let surf = &self.pipes.surfaces[cull as usize];
             match (wire_mode, xray) {
                 (true, true) => {}
                 (true, false) => {

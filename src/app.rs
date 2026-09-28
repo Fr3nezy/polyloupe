@@ -70,6 +70,23 @@ struct SceneInfo {
     qa: Option<qa::Report>,
 }
 
+/// A cut through the model along a world axis.
+#[derive(Clone, Copy)]
+struct Section {
+    /// 0 = X, 1 = Y, 2 = Z.
+    axis: usize,
+    /// Position across the scene bounds, 0..1.
+    t: f32,
+    /// Keep the other side.
+    flip: bool,
+}
+
+impl Default for Section {
+    fn default() -> Self {
+        Self { axis: 0, t: 0.5, flip: false }
+    }
+}
+
 /// Mesh analysis totals, marker instances and snapping data, per mesh.
 type QaResult = (qa::Report, Vec<Vec<render::MarkerInstance>>, Vec<snap::SnapMesh>);
 
@@ -195,6 +212,8 @@ pub struct ViewerApp {
     /// Point under the cursor and whether it snapped to a vertex.
     measure_hover: Option<(Vec3, bool)>,
     measure_hover_px: Option<[u32; 2]>,
+    /// Cross-section, when on.
+    section: Option<Section>,
     env_loaded: Option<Environment>,
     env_loading: Option<(Environment, Receiver<Result<EnvImage, String>>)>,
     capture: Option<CaptureState>,
@@ -266,6 +285,7 @@ impl ViewerApp {
             measure_start: None,
             measure_hover: None,
             measure_hover_px: None,
+            section: None,
             env_loaded: None,
             env_loading: None,
             capture: launch.capture.map(|opts| CaptureState { opts, frames: 0, requested: false }),
@@ -383,6 +403,7 @@ impl ViewerApp {
 
     /// Saves the current view as a PNG, without UI and selection outlines.
     fn export_to(&mut self, path: &Path) -> Result<(), String> {
+        let section = self.section_plane();
         let Some(renderer) = &mut self.renderer else { return Err(tr("Couldn't render the image").into()) };
         // 4x MSAA color + depth at 4096 px is already ~150 MB each; keep exports under that.
         const MAX_SIDE: f32 = 4096.0;
@@ -415,6 +436,7 @@ impl ViewerApp {
             settings: &settings,
             pick: None,
             transparent: settings.export_transparent,
+            section,
         };
         renderer.render(None, size, &input);
         match renderer.read_pixels() {
@@ -601,6 +623,7 @@ impl ViewerApp {
         self.measures.clear();
         self.cancel_measure();
         self.snap.clear();
+        self.section = None;
         self.visible = vec![true; objects.len()];
         self.pass_override = vec![None; objects.len()];
         let missing: Vec<String> = scene
@@ -671,6 +694,50 @@ impl ViewerApp {
             }
             None => (hit, false),
         }
+    }
+
+    /// Bounds of the whole scene, the range the section plane moves across.
+    fn scene_bounds(&self) -> Aabb {
+        let mut b = Aabb::EMPTY;
+        if let Some(info) = &self.info {
+            for o in &info.objects {
+                b.union(&o.bounds);
+            }
+        }
+        b
+    }
+
+    /// The section as a plane (unit normal, offset) for the renderer.
+    fn section_plane(&self) -> Option<[f32; 4]> {
+        let s = self.section?;
+        let b = self.scene_bounds();
+        if !b.is_valid() {
+            return None;
+        }
+        let at = b.min[s.axis] + (b.max[s.axis] - b.min[s.axis]) * s.t;
+        let sign = if s.flip { -1.0 } else { 1.0 };
+        let mut n = [0.0; 3];
+        n[s.axis] = sign;
+        Some([n[0], n[1], n[2], sign * at])
+    }
+
+    /// Screen positions of the scene's two ends along the section axis (through its center).
+    fn section_axis_on_screen(&self, viewport: Rect) -> Option<(Pos2, Pos2)> {
+        let s = self.section?;
+        let b = self.scene_bounds();
+        let (mut lo, mut hi) = (b.center(), b.center());
+        lo[s.axis] = b.min[s.axis];
+        hi[s.axis] = b.max[s.axis];
+        let aspect = viewport.width() / viewport.height().max(1.0);
+        let view_proj = self.camera.projection(aspect) * self.camera.view_matrix();
+        let project = |p: Vec3| {
+            let c = view_proj * p.extend(1.0);
+            (c.w > 1e-6).then(|| {
+                let n = c.truncate() / c.w;
+                pos2(viewport.left() + (n.x * 0.5 + 0.5) * viewport.width(), viewport.top() + (0.5 - n.y * 0.5) * viewport.height())
+            })
+        };
+        Some((project(lo)?, project(hi)?))
     }
 
     fn cancel_measure(&mut self) {
@@ -1092,8 +1159,18 @@ impl ViewerApp {
             Tool::Orbit => Some(Gesture::Orbit),
             Tool::Pan => Some(Gesture::Pan),
             Tool::Zoom => Some(Gesture::Zoom),
-            Tool::Measure => None,
+            Tool::Measure | Tool::Section => None,
         };
+        // Section tool: a left drag slides the plane along its axis, following the axis
+        // direction on screen.
+        if self.tool == Tool::Section && drag.left && !mods.any() {
+            if let (Some(section), Some((a, b))) = (self.section, self.section_axis_on_screen(viewport)) {
+                let axis = b - a;
+                let d = response.drag_delta();
+                let step = (d.x * axis.x + d.y * axis.y) / axis.length_sq().max(1.0);
+                self.section = Some(Section { t: (section.t + step).clamp(0.0, 1.0), ..section });
+            }
+        }
         let gesture = nav.gesture(drag).or(tool_gesture);
         let d = response.drag_delta() * ppp;
         match gesture {
@@ -1188,6 +1265,7 @@ impl ViewerApp {
             }
             self.render_viewport(ui, frame, rect);
             self.draw_measures(ui, rect);
+            self.draw_section(ui, rect);
 
             let overlays = self.settings.show_overlays;
             if overlays {
@@ -1208,6 +1286,7 @@ impl ViewerApp {
                 }
             }
             self.viewport_toolbar(&ctx, rect);
+            self.section_bar(&ctx, rect);
             if let Some(loading) = &self.loading {
                 shell::loading_overlay(ui, rect, &file_name(&loading.path));
                 ctx.request_repaint_after(Duration::from_millis(50));
@@ -1221,6 +1300,7 @@ impl ViewerApp {
     }
 
     fn render_viewport(&mut self, ui: &mut Ui, frame: &mut eframe::Frame, rect: Rect) {
+        let section = self.section_plane();
         let (Some(renderer), Some(rs)) = (&mut self.renderer, frame.wgpu_render_state()) else {
             ui.painter().rect_filled(rect, 0.0, theme::VIEWPORT);
             return;
@@ -1263,6 +1343,7 @@ impl ViewerApp {
             settings: &effective,
             pick: pick.map(|p| p.0),
             transparent: false,
+            section,
         };
         let texture = {
             let mut egui_renderer = rs.renderer.write();
@@ -1341,6 +1422,9 @@ impl ViewerApp {
             }
             if cap.opts.pie {
                 self.pie.open(ctx.content_rect().center(), ctx.input(|i| i.time));
+            }
+            if let Some((axis, t, flip)) = cap.opts.section {
+                self.section = Some(Section { axis, t, flip });
             }
             if let Some([a, _]) = cap.opts.measure {
                 self.tool = Tool::Measure;

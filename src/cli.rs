@@ -31,6 +31,8 @@ pub struct CaptureOptions {
     pub click: Option<[u32; 2]>,
     /// Two measurement points at viewport pixel coordinates (Measure tool).
     pub measure: Option<[[u32; 2]; 2]>,
+    /// Section along an axis (0..2) at a fraction of the bounds, optionally flipped.
+    pub section: Option<(usize, f32, bool)>,
     /// Channel to show on the selection (`--select`) only.
     pub channel: Option<TexturePass>,
     pub clip: Option<usize>,
@@ -164,6 +166,19 @@ pub fn parse() -> Result<LaunchOptions, String> {
             }
             "--transparent" => capture.settings.push((arg, None)),
             "--channel" => capture.channel = Some(parse_pass(&value("--channel")?)),
+            "--section" => {
+                // x|y|z[,position 0..1][,flip]
+                let v = value("--section")?;
+                let mut parts = v.split(',');
+                let axis = match parts.next().unwrap_or("") {
+                    "x" | "X" => 0,
+                    "y" | "Y" => 1,
+                    "z" | "Z" => 2,
+                    _ => return Err("--section expects x, y or z".into()),
+                };
+                let t = parts.next().and_then(|t| t.parse().ok()).unwrap_or(0.5);
+                capture.section = Some((axis, t, parts.next() == Some("flip")));
+            }
             "--measure" => {
                 let v = value("--measure")?;
                 let n: Vec<u32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
