@@ -875,6 +875,7 @@ impl ViewerApp {
                             (qa.non_manifold_edges, "Non-manifold edges", theme::MARK_NON_MANIFOLD, Some(&mut s.show_non_manifold)),
                             (qa.open_edges, "Open edges", theme::MARK_OPEN, Some(&mut s.show_open_edges)),
                             (qa.overlapping_vertices, "Overlapping vertices", theme::MARK_OVERLAP, Some(&mut s.show_overlapping)),
+                            (qa.inverted_normals, "Inverted normals", theme::MARK_NORMAL, Some(&mut s.show_normals)),
                             (qa.degenerate_faces, "Degenerate faces", theme::TEXT_FAINT, None),
                         ];
                         for (k, (count, label, color, toggle)) in rows.into_iter().enumerate() {

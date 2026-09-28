@@ -82,6 +82,7 @@ impl Thumbnailer {
             pick: None,
             transparent: true,
             section: None,
+            normal_length: 0.0,
         };
         self.renderer.render(None, [render_size, render_size], &input);
         let ([w, h], pixels) = self.renderer.read_pixels().ok_or("Couldn't read the rendered image")?;

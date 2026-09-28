@@ -286,6 +286,11 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         color = lit(n, obj.color.rgb);
         alpha = obj.color.a;
     }
+    // Face orientation overlay (Blender's colors): front blue, back red.
+    if g.normals.y > 0.5 {
+        let side = select(vec3<f32>(0.64, 0.02, 0.02), vec3<f32>(0.03, 0.12, 0.72), front);
+        color = mix(color, side * (0.35 + 0.65 * max(dot(normalize((g.view * vec4<f32>(n, 0.0)).xyz), vec3<f32>(0.0, 0.0, 1.0)), 0.0)), 0.7);
+    }
     // params.x is 1 for opaque passes and the x-ray alpha otherwise.
     return vec4<f32>(color, g.params.x * alpha);
 }
@@ -447,6 +452,40 @@ fn fs_marker(in: MarkerOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_marker_hidden(in: MarkerOut) -> @location(0) vec4<f32> {
     return marker(in, 0.28);
+}
+
+// --- Normal lines: one instance per vertex, two line ends ---
+
+@vertex
+fn vs_normal(
+    @builtin(vertex_index) vi: u32,
+    @location(0) pos: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(5) joints: vec4<u32>,
+    @location(6) weights: vec4<f32>,
+) -> WireOut {
+    let m = vertex_matrix(joints, weights);
+    let wp = m * vec4<f32>(pos, 1.0);
+    var wn: vec3<f32>;
+    if (obj.info.y & SKINNED) != 0u {
+        wn = (m * vec4<f32>(normal, 0.0)).xyz;
+    } else {
+        wn = (obj.normal_mat * vec4<f32>(normal, 0.0)).xyz;
+    }
+    let len = length(wn);
+    let dir = select(vec3<f32>(0.0), wn / len, len > 1e-8);
+    let world = wp.xyz + dir * g.normals.x * f32(vi);
+    var clip = g.view_proj * vec4<f32>(world, 1.0);
+    clip.z = clip.z * 1.0008 + 1e-7 * clip.w;
+    return WireOut(clip, world);
+}
+
+@fragment
+fn fs_normal(in: WireOut) -> @location(0) vec4<f32> {
+    if section_cuts(in.world_pos) {
+        discard;
+    }
+    return vec4<f32>(srgb_to_linear(vec3<f32>(0.35, 0.7, 1.0)), 0.9);
 }
 
 // --- Object ids (picking and outlines) ---

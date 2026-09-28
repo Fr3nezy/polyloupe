@@ -57,6 +57,7 @@ struct GlobalsUniform {
     viewport: [f32; 4],
     markers: [u32; 4],
     section: [f32; 4],
+    normals: [f32; 4],
 }
 
 /// One mesh analysis marker (see `qa`): an edge from `a` to `b`, or a vertex at `a`.
@@ -143,6 +144,8 @@ pub struct FrameInput<'a> {
     pub transparent: bool,
     /// Section plane (normal, offset): geometry on the normal's side is cut away.
     pub section: Option<[f32; 4]>,
+    /// Length of the normal lines in world units (when the overlay is on).
+    pub normal_length: f32,
 }
 
 struct GpuMesh {
@@ -155,6 +158,7 @@ struct GpuMesh {
     weights: Option<wgpu::Buffer>,
     indices: wgpu::Buffer,
     index_count: u32,
+    vertex_count: u32,
     edges: Option<(wgpu::Buffer, u32)>,
     /// Mesh analysis markers, filled in when the background analysis finishes.
     markers: Option<(wgpu::Buffer, u32)>,
@@ -203,6 +207,7 @@ struct Pipelines {
     wire_xray: wgpu::RenderPipeline,
     marker: wgpu::RenderPipeline,
     marker_hidden: wgpu::RenderPipeline,
+    normals: wgpu::RenderPipeline,
     grid: wgpu::RenderPipeline,
     background: wgpu::RenderPipeline,
     id: wgpu::RenderPipeline,
@@ -604,6 +609,7 @@ impl Renderer {
                 weights,
                 indices: init("indices", bytemuck::cast_slice(&mesh.indices), index),
                 index_count: mesh.indices.len() as u32,
+                vertex_count: mesh.positions.len() as u32,
                 edges,
                 markers: None,
                 material,
@@ -715,6 +721,24 @@ impl Renderer {
                 });
                 (buffer, instances.len() as u32)
             });
+        }
+    }
+
+    /// Normal lines: every vertex is an instance of a two-point line.
+    fn draw_normals(&self, pass: &mut wgpu::RenderPass<'_>) {
+        for (i, m) in self.meshes.iter().enumerate() {
+            if m.vertex_count == 0 || !self.visible.get(i).copied().unwrap_or(true) {
+                continue;
+            }
+            pass.set_bind_group(1, &self.object_bg, &[(i as u64 * self.object_stride) as u32]);
+            pass.set_vertex_buffer(0, m.positions.slice(..));
+            pass.set_vertex_buffer(1, m.normals.slice(..));
+            for (slot, buf) in [(2, &m.joints), (3, &m.weights)] {
+                if let Some(b) = buf.as_ref().or(self.zero_buf.as_ref()) {
+                    pass.set_vertex_buffer(slot, b.slice(..));
+                }
+            }
+            pass.draw(0..2, 0..m.vertex_count);
         }
     }
 
@@ -988,6 +1012,7 @@ impl Renderer {
             viewport: [size[0] as f32, size[1] as f32, 1.0 / size[0] as f32, 1.0 / size[1] as f32],
             markers: [s.show_non_manifold as u32, s.show_open_edges as u32, s.show_overlapping as u32, 0],
             section: input.section.unwrap_or([0.0; 4]),
+            normals: [if s.show_normals { input.normal_length } else { 0.0 }, s.show_face_orientation as u32 as f32, 0.0, 0.0],
         };
         self.queue.write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
 
@@ -1123,7 +1148,13 @@ impl Renderer {
                 self.draw_positions_only(&mut pass, true);
             }
 
-            // 6. Mesh analysis markers: faint where hidden, solid where visible.
+            // 6. Normal lines.
+            if s.show_normals && input.normal_length > 0.0 {
+                pass.set_pipeline(&self.pipes.normals);
+                self.draw_normals(&mut pass);
+            }
+
+            // 7. Mesh analysis markers: faint where hidden, solid where visible.
             if s.show_non_manifold || s.show_open_edges || s.show_overlapping {
                 pass.set_pipeline(&self.pipes.marker_hidden);
                 self.draw_markers(&mut pass);
@@ -1134,7 +1165,7 @@ impl Renderer {
             }
         }
 
-        // 7. Outlines over the resolved image.
+        // 8. Outlines over the resolved image.
         if need_ids && (object_outline || any_selected) {
             let targets = self.targets.as_mut().expect("targets exist");
             if targets.outline_bg.is_none() {
@@ -1551,7 +1582,32 @@ fn create_pipelines(
         })
     };
 
+    // Normal lines read positions, normals and skinning once per instance (vertex).
+    let instance = |i: usize| wgpu::VertexBufferLayout {
+        array_stride: attrs[i][0].format.size(),
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &attrs[i],
+    };
+    let normal_buffers = [Some(instance(0)), Some(instance(1)), Some(instance(5)), Some(instance(6))];
+    let normals = build(Desc {
+        label: "normals",
+        layout: &object_layout,
+        module: &mesh_module,
+        vs: "vs_normal",
+        fs: "fs_normal",
+        buffers: &normal_buffers,
+        topology: Topo::LineList,
+        depth: Some((false, Cmp::GreaterEqual)),
+        cull: None,
+        samples: SAMPLES,
+        format: COLOR_FORMAT,
+        blend: alpha,
+        write_mask: all,
+        second: None,
+    });
+
     Pipelines {
+        normals,
         surfaces: [None, Some(wgpu::Face::Back)].map(|cull| SurfacePipelines {
             opaque: mesh("mesh", (true, Cmp::Greater), None, all, cull),
             depth_only: mesh("mesh depth", (true, Cmp::Greater), None, wgpu::ColorWrites::empty(), cull),

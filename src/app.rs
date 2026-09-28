@@ -427,6 +427,7 @@ impl ViewerApp {
     /// Saves the current view as a PNG, without UI and selection outlines.
     fn export_to(&mut self, path: &Path) -> Result<(), String> {
         let section = self.section_plane();
+        let normal_length = self.normal_length();
         let Some(renderer) = &mut self.renderer else { return Err(tr("Couldn't render the image").into()) };
         // 4x MSAA color + depth at 4096 px is already ~150 MB each; keep exports under that.
         const MAX_SIDE: f32 = 4096.0;
@@ -441,6 +442,8 @@ impl ViewerApp {
         settings.show_non_manifold &= settings.show_overlays;
         settings.show_open_edges &= settings.show_overlays;
         settings.show_overlapping &= settings.show_overlays;
+        settings.show_normals &= settings.show_overlays;
+        settings.show_face_orientation &= settings.show_overlays;
         if settings.export_transparent {
             settings.env_background = false;
         }
@@ -460,6 +463,7 @@ impl ViewerApp {
             pick: None,
             transparent: settings.export_transparent,
             section,
+            normal_length,
         };
         renderer.render(None, size, &input);
         match renderer.read_pixels() {
@@ -689,6 +693,12 @@ impl ViewerApp {
             }
         }
         b
+    }
+
+    /// Normal line length in world units: a fraction of the scene's size.
+    fn normal_length(&self) -> f32 {
+        let b = self.scene_bounds();
+        if b.is_valid() { b.radius() * self.settings.normal_size } else { 0.0 }
     }
 
     /// The section as a plane (unit normal, offset) for the renderer.
@@ -1315,12 +1325,15 @@ impl ViewerApp {
             effective.show_non_manifold = false;
             effective.show_open_edges = false;
             effective.show_overlapping = false;
+            effective.show_normals = false;
+            effective.show_face_orientation = false;
         }
         effective
     }
 
     fn render_viewport(&mut self, ui: &mut Ui, frame: &mut eframe::Frame, rect: Rect) {
         let section = self.section_plane();
+        let normal_length = self.normal_length();
         let effective = self.effective_settings();
         let (Some(renderer), Some(rs)) = (&mut self.renderer, frame.wgpu_render_state()) else {
             ui.painter().rect_filled(rect, 0.0, theme::VIEWPORT);
@@ -1356,6 +1369,7 @@ impl ViewerApp {
             pick: pick.map(|p| p.0),
             transparent: false,
             section,
+            normal_length,
         };
         let texture = {
             let mut egui_renderer = rs.renderer.write();

@@ -35,6 +35,8 @@ pub const SELECTION: Color32 = Color32::from_rgb(0xe0, 0x89, 0x2a);
 pub const MARK_NON_MANIFOLD: Color32 = Color32::from_rgb(0xff, 0x2e, 0x78);
 pub const MARK_OPEN: Color32 = Color32::from_rgb(0xff, 0xc2, 0x33);
 pub const MARK_OVERLAP: Color32 = Color32::from_rgb(0x33, 0xdb, 0xff);
+/// Normal lines; keep in sync with `fs_normal` in mesh.wgsl.
+pub const MARK_NORMAL: Color32 = Color32::from_rgb(0x59, 0xb3, 0xff);
 /// Section plane outline and cap (the cap hatching in mesh.wgsl uses the same red).
 pub const SECTION: Color32 = Color32::from_rgb(0xd9, 0x4d, 0x38);
 
