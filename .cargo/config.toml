@@ -1,0 +1,4 @@
+# Link the C runtime statically: polyloupe.exe and the Explorer thumbnail DLL then only depend on
+# DLLs that ship with Windows, so they run on machines without the Visual C++ Redistributable.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

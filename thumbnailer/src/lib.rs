@@ -75,6 +75,26 @@ extern "system" fn DllMain(module: HINSTANCE, reason: u32, _reserved: *mut c_voi
     BOOL(1)
 }
 
+/// `%LOCALAPPDATA%\Poly Loupe`: the thumbnail server record, and the debug log.
+fn app_dir() -> Option<PathBuf> {
+    Some(PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Poly Loupe"))
+}
+
+/// Appends to `thumbs.log` when a `thumbs-debug` file exists next to it, so a user can trace
+/// what Explorer asks for without a debug build.
+fn log(message: impl FnOnce() -> String) {
+    let Some(dir) = app_dir() else { return };
+    if !dir.join("thumbs-debug").exists() {
+        return;
+    }
+    use std::io::Write;
+    let exe = std::env::current_exe().ok().and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_default();
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("thumbs.log")) {
+        let _ = writeln!(f, "{secs:.3} {exe}:{} {}", std::process::id(), message());
+    }
+}
+
 fn module_path() -> Option<PathBuf> {
     let module = HMODULE(MODULE.load(Ordering::Relaxed) as *mut c_void);
     let mut buf = vec![0u16; 1024];
@@ -176,6 +196,7 @@ fn thumbnail(
         Source::Path(path) => render(path, cx),
         Source::Stream(stream) => render_stream(stream, cx),
     };
+    log(|| format!("thumbnail {cx}px: {}", if rendered.is_some() { "ok" } else { "FAILED" }));
     let (w, h, rgba) = rendered.ok_or(windows_core::Error::from(E_FAIL))?;
     let hbitmap = to_hbitmap(w, h, &rgba)?;
     unsafe {
@@ -187,19 +208,31 @@ fn thumbnail(
 
 impl IInitializeWithStream_Impl for ThumbnailProvider_Impl {
     fn Initialize(&self, stream: Ref<IStream>, _mode: u32) -> Result<()> {
+        log(|| "init stream".into());
         store(&self.source, Source::Stream(stream.ok()?.clone()))
     }
 }
 
 impl IInitializeWithFile_Impl for ThumbnailProvider_Impl {
     fn Initialize(&self, path: &PCWSTR, _mode: u32) -> Result<()> {
-        store(&self.source, path_from_file(path)?)
+        let source = path_from_file(path)?;
+        log(|| format!("init file {}", describe(&source)));
+        store(&self.source, source)
     }
 }
 
 impl IInitializeWithItem_Impl for ThumbnailProvider_Impl {
     fn Initialize(&self, item: Ref<IShellItem>, _mode: u32) -> Result<()> {
-        store(&self.source, path_from_item(item)?)
+        let source = path_from_item(item)?;
+        log(|| format!("init item {}", describe(&source)));
+        store(&self.source, source)
+    }
+}
+
+fn describe(source: &Source) -> String {
+    match source {
+        Source::Path(p) => p.display().to_string(),
+        Source::Stream(_) => "stream".into(),
     }
 }
 
@@ -211,13 +244,17 @@ impl IThumbnailProvider_Impl for ThumbnailProvider_Impl {
 
 impl IInitializeWithFile_Impl for PathThumbnailProvider_Impl {
     fn Initialize(&self, path: &PCWSTR, _mode: u32) -> Result<()> {
-        store(&self.source, path_from_file(path)?)
+        let source = path_from_file(path)?;
+        log(|| format!("path-only init file {}", describe(&source)));
+        store(&self.source, source)
     }
 }
 
 impl IInitializeWithItem_Impl for PathThumbnailProvider_Impl {
     fn Initialize(&self, item: Ref<IShellItem>, _mode: u32) -> Result<()> {
-        store(&self.source, path_from_item(item)?)
+        let source = path_from_item(item)?;
+        log(|| format!("path-only init item {}", describe(&source)));
+        store(&self.source, source)
     }
 }
 
@@ -239,6 +276,7 @@ fn render_stream(stream: &IStream, size: u32) -> Option<(u32, u32, Vec<u8>)> {
         .flatten();
     unsafe { CoTaskMemFree(Some(stat.pwcsName.0 as *const c_void)) };
     let name = PathBuf::from(name?);
+    log(|| format!("stream name {:?} absolute={}", name, name.is_absolute()));
     if name.is_absolute() && name.is_file() {
         return render(&name, size);
     }
@@ -283,7 +321,7 @@ fn render(path: &std::path::Path, size: u32) -> Option<(u32, u32, Vec<u8>)> {
     let exe = module_path()?.parent()?.join("polyloupe.exe");
     match ask_server(path, size) {
         Server::Answered(result) => return result,
-        Server::Unreachable => {}
+        Server::Unreachable => log(|| "server unreachable, starting one".into()),
     }
     // Break away from the surrogate's job so the server outlives this dllhost; not every job
     // allows it, hence the retry.
@@ -307,6 +345,7 @@ fn render(path: &std::path::Path, size: u32) -> Option<(u32, u32, Vec<u8>)> {
             }
         }
     }
+    log(|| "server didn't answer, rendering once".into());
     render_once(&exe, path, size)
 }
 
@@ -319,9 +358,7 @@ enum Server {
 fn ask_server(path: &std::path::Path, size: u32) -> Server {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::{Ipv4Addr, SocketAddr, TcpStream};
-    let record = std::env::var_os("LOCALAPPDATA")
-        .map(|d| PathBuf::from(d).join("Poly Loupe").join("thumbnail-server"))
-        .and_then(|p| std::fs::read_to_string(p).ok());
+    let record = app_dir().and_then(|d| std::fs::read_to_string(d.join("thumbnail-server")).ok());
     let Some((port, token)) = record.as_deref().and_then(|r| r.trim().split_once(' ')) else {
         return Server::Unreachable;
     };
@@ -426,6 +463,7 @@ extern "system" fn DllGetClassObject(
     riid: *const GUID,
     object: *mut *mut c_void,
 ) -> HRESULT {
+    log(|| format!("DllGetClassObject {:?}", unsafe { clsid.as_ref() }));
     if clsid.is_null()
         || object.is_null()
         || !matches!(
