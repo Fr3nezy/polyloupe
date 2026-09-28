@@ -36,6 +36,8 @@ pub struct CaptureOptions {
     /// Model B for an A/B comparison, and whether to use the split layout.
     pub compare: Option<PathBuf>,
     pub compare_split: bool,
+    /// Open the UV pane.
+    pub uv: bool,
     /// Channel to show on the selection (`--select`) only.
     pub channel: Option<TexturePass>,
     pub clip: Option<usize>,
@@ -171,6 +173,7 @@ pub fn parse() -> Result<LaunchOptions, String> {
             "--channel" => capture.channel = Some(parse_pass(&value("--channel")?)),
             "--compare" => capture.compare = Some(PathBuf::from(value("--compare")?)),
             "--compare-split" => capture.compare_split = true,
+            "--uv" => capture.uv = true,
             "--section" => {
                 // x|y|z[,position 0..1][,flip]
                 let v = value("--section")?;

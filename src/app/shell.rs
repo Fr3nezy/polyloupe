@@ -406,6 +406,9 @@ impl ViewerApp {
                     }
                     if self.info.is_some() {
                         toolbar_separator(ui);
+                        if text_button(ui, "UV", self.uv_view.open).on_hover_text(tr("UV layout (U)")).clicked() {
+                            self.uv_view.open = !self.uv_view.open;
+                        }
                         compare_action = self.compare_toolbar(ui);
                     }
                     toolbar_separator(ui);

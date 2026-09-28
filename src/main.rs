@@ -17,6 +17,7 @@ mod settings;
 mod snap;
 mod thumbnail;
 mod ui;
+mod uv;
 
 use eframe::egui;
 
