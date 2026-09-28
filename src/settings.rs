@@ -128,6 +128,8 @@ pub struct Settings {
     pub normal_size: f32,
     /// Front faces blue, back faces red.
     pub show_face_orientation: bool,
+    /// Object origins (pivots) as dots, like Blender.
+    pub show_origins: bool,
     pub show_stats: bool,
     pub show_gizmo: bool,
 
@@ -182,6 +184,7 @@ impl Default for Settings {
             show_normals: false,
             normal_size: 0.02,
             show_face_orientation: false,
+            show_origins: false,
             show_stats: true,
             show_gizmo: true,
             vsync: true,

@@ -460,6 +460,7 @@ fn load_gltf(path: &Path, texture_dirs: &[PathBuf]) -> Result<Scene, String> {
 
     let images = decode_images(jobs, &mut warnings);
     let mut scene = Scene::new(meshes, materials, images, vertex_count);
+    scene.units = crate::scene::Units::Meters;
     scene.warnings = warnings;
     scene.animation = anim;
     Ok(scene)
@@ -915,6 +916,9 @@ fn load_ufbx(path: &Path, texture_dirs: &[PathBuf]) -> Result<Scene, String> {
 
     let images = decode_images(jobs, &mut warnings);
     let mut result = Scene::new(meshes, materials, images, vertex_count);
+    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("fbx")) {
+        result.units = crate::scene::Units::Declared(scene.settings.original_unit_meters as f64);
+    }
     result.warnings = warnings;
     result.animation = anim;
     Ok(result)

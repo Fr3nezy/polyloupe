@@ -92,6 +92,8 @@ pub fn overlays(ui: &mut Ui, s: &mut Settings) {
         ui.add_enabled_ui(s.shading != ShadingMode::Wireframe, |ui| {
             ui.checkbox(&mut s.show_wire_overlay, tr("Wireframe"));
         });
+        ui.checkbox(&mut s.show_origins, tr("Origins"))
+            .on_hover_text(tr("Each object's pivot as a dot, like Blender"));
         ui.add_enabled_ui(s.shading == ShadingMode::Solid, |ui| {
             ui.checkbox(&mut s.show_outline, tr("Object outlines"))
                 .on_hover_text(tr("Dark line around each object in Solid mode"));
