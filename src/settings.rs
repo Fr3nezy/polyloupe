@@ -98,7 +98,7 @@ pub struct Settings {
     pub backface_culling: bool,
     pub exposure: f32,
     pub texture_pass: TexturePass,
-    /// Solid mode object outline, like Blender's Options > Outline.
+    /// Solid mode object outline, like Blender's Options > Outline (an overlay here).
     pub show_outline: bool,
 
     pub environment: Environment,
@@ -119,6 +119,10 @@ pub struct Settings {
     pub show_grid: bool,
     pub show_axes: bool,
     pub show_wire_overlay: bool,
+    /// Mesh analysis overlays (see `qa`).
+    pub show_non_manifold: bool,
+    pub show_open_edges: bool,
+    pub show_overlapping: bool,
     pub show_stats: bool,
     pub show_gizmo: bool,
 
@@ -167,6 +171,9 @@ impl Default for Settings {
             show_grid: true,
             show_axes: true,
             show_wire_overlay: false,
+            show_non_manifold: false,
+            show_open_edges: false,
+            show_overlapping: false,
             show_stats: true,
             show_gizmo: true,
             vsync: true,

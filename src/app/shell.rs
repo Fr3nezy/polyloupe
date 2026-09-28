@@ -684,6 +684,60 @@ impl ViewerApp {
         });
         ui.add_space(12.0);
 
+        widgets::section(ui, "Mesh Check");
+        match &info.qa {
+            None => {
+                ui.label(RichText::new(tr("Analyzing…")).color(theme::TEXT_DIM));
+            }
+            Some(qa) => {
+                let s = &mut self.settings;
+                Frame::new()
+                    .stroke(Stroke::new(1.0, theme::BORDER))
+                    .corner_radius(CornerRadius::same(theme::RADIUS))
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        let rows = [
+                            (qa.non_manifold_edges, "Non-manifold edges", theme::MARK_NON_MANIFOLD, Some(&mut s.show_non_manifold)),
+                            (qa.open_edges, "Open edges", theme::MARK_OPEN, Some(&mut s.show_open_edges)),
+                            (qa.overlapping_vertices, "Overlapping vertices", theme::MARK_OVERLAP, Some(&mut s.show_overlapping)),
+                            (qa.degenerate_faces, "Degenerate faces", theme::TEXT_FAINT, None),
+                        ];
+                        for (k, (count, label, color, toggle)) in rows.into_iter().enumerate() {
+                            let width = ui.available_width();
+                            let (rect, r) = ui.allocate_exact_size(vec2(width, 36.0), Sense::click());
+                            if k > 0 {
+                                ui.painter().hline(rect.x_range(), rect.top(), Stroke::new(1.0, theme::BORDER));
+                            }
+                            let on = toggle.as_ref().is_some_and(|t| **t) && s.show_overlays;
+                            if r.hovered() && toggle.is_some() {
+                                ui.painter().rect_filled(rect.shrink(1.0), CornerRadius::ZERO, theme::WIDGET_HOVER);
+                            }
+                            let swatch = Rect::from_center_size(pos2(rect.left() + 18.0, rect.center().y), Vec2::splat(10.0));
+                            if on {
+                                ui.painter().rect_filled(swatch, CornerRadius::same(2), color);
+                            } else {
+                                ui.painter().rect_stroke(swatch, CornerRadius::same(2), Stroke::new(1.5, color), egui::StrokeKind::Inside);
+                            }
+                            let text = if count > 0 { theme::TEXT } else { theme::TEXT_DIM };
+                            ui.painter().text(pos2(rect.left() + 34.0, rect.center().y), Align2::LEFT_CENTER, tr(label), FontId::proportional(13.0), text);
+                            let value = if count > 0 { thousands(count) } else { "0".to_string() };
+                            ui.painter().text(rect.right_center() - vec2(12.0, 0.0), Align2::RIGHT_CENTER, value, theme::mono(12.0), text);
+                            if let Some(t) = toggle {
+                                let r = r.on_hover_text(tr("Click to show them in the viewport"));
+                                if r.clicked() {
+                                    *t = !on;
+                                    s.show_overlays |= *t;
+                                }
+                            }
+                        }
+                    });
+                if qa.is_clean() {
+                    ui.label(RichText::new(tr("No problems found: the mesh is closed and clean.")).size(11.0).color(theme::TEXT_DIM));
+                }
+            }
+        }
+        ui.add_space(12.0);
+
         let active = self.selection.active.map(|a| &info.objects[a]);
         let size = match active {
             Some(o) => o.bounds.size(),

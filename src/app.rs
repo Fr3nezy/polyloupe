@@ -22,7 +22,8 @@ use crate::instance;
 use shell::{InspectorTab, ToastAction, Tool};
 use crate::navigation::{DragInput, Gesture, Navigation};
 use crate::loader::{self, EnvImage};
-use crate::render::{FrameInput, Renderer, environment};
+use crate::render::{self, FrameInput, Renderer, environment};
+use crate::qa;
 use crate::scene::{Aabb, MapRef, Scene};
 use crate::settings::{ColorMode, Environment, Settings, ShadingMode, TexturePass};
 use crate::ui::gizmo::{self, GizmoAction};
@@ -63,6 +64,8 @@ struct SceneInfo {
     vertices: usize,
     triangles: usize,
     load_time: Duration,
+    /// Mesh analysis, filled in by a background thread shortly after loading.
+    qa: Option<qa::Report>,
 }
 
 /// Blender-style selection: a set plus one active object.
@@ -148,6 +151,8 @@ pub struct ViewerApp {
     renderer: Option<Renderer>,
     info: Option<SceneInfo>,
     loading: Option<Loading>,
+    /// Mesh analysis of the loaded scene: totals plus marker instances per mesh.
+    qa_rx: Option<Receiver<(qa::Report, Vec<Vec<render::MarkerInstance>>)>>,
     selection: Selection,
     visible: Vec<bool>,
     /// Per-object texture channel shown instead of the global color mode.
@@ -217,6 +222,7 @@ impl ViewerApp {
             renderer,
             info: None,
             loading: None,
+            qa_rx: None,
             selection: Selection::default(),
             visible: Vec::new(),
             pass_override: Vec::new(),
@@ -358,6 +364,10 @@ impl ViewerApp {
         let mut settings = self.settings.clone();
         settings.show_grid = settings.show_overlays && settings.export_grid;
         settings.show_wire_overlay &= settings.show_overlays;
+        settings.show_outline &= settings.show_overlays;
+        settings.show_non_manifold &= settings.show_overlays;
+        settings.show_open_edges &= settings.show_overlays;
+        settings.show_overlapping &= settings.show_overlays;
         if settings.export_transparent {
             settings.env_background = false;
         }
@@ -581,6 +591,7 @@ impl ViewerApp {
             vertices: scene.source_vertex_count,
             triangles: scene.triangle_count(),
             load_time: loading.started.elapsed(),
+            qa: None,
         });
         self.settings.push_recent(&loading.path.to_string_lossy());
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{file_name} — {APP_NAME}")));
@@ -594,7 +605,32 @@ impl ViewerApp {
             let text = if more > 0 { trf("{first} (+{more} more)", &[("first", first), ("more", &more)]) } else { (*first).clone() };
             self.show_toast(ctx, text, false);
         }
-        // The CPU copy is dropped here: the GPU holds everything the viewport needs.
+        // The CPU copy goes to the mesh analysis, then is dropped: the GPU holds everything
+        // the viewport needs. A newer load replaces `qa_rx`, so stale results are ignored.
+        let (tx, rx) = channel();
+        self.qa_rx = Some(rx);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let started = Instant::now();
+            let (report, marks) = qa::analyze(&scene.meshes);
+            log::info!("mesh analysis in {:?}: {report:?}", started.elapsed());
+            let instances = scene.meshes.iter().zip(&marks).map(|(m, k)| render::marker_instances(m, k)).collect();
+            if tx.send((report, instances)).is_ok() {
+                ctx.request_repaint();
+            }
+        });
+    }
+
+    fn poll_qa(&mut self) {
+        let Some(rx) = &self.qa_rx else { return };
+        let Ok((report, instances)) = rx.try_recv() else { return };
+        self.qa_rx = None;
+        if let Some(r) = &mut self.renderer {
+            r.set_markers(&instances);
+        }
+        if let Some(info) = &mut self.info {
+            info.qa = Some(report);
+        }
     }
 
     /// Loads the selected environment on a worker thread when the Rendered mode needs it.
@@ -1118,6 +1154,10 @@ impl ViewerApp {
         if !effective.show_overlays {
             effective.show_grid = false;
             effective.show_wire_overlay = false;
+            effective.show_outline = false;
+            effective.show_non_manifold = false;
+            effective.show_open_edges = false;
+            effective.show_overlapping = false;
         }
         let pick = self.pending_pick.take();
         let input = FrameInput {
@@ -1152,6 +1192,10 @@ impl ViewerApp {
         let Some(cap) = &mut self.capture else { return };
         ctx.request_repaint();
         if self.loading.is_some() || self.env_loading.is_some() {
+            return;
+        }
+        // Hold the shot until the mesh analysis is in, so its markers are in the picture.
+        if cap.frames > 2 && self.qa_rx.is_some() {
             return;
         }
         cap.frames += 1;
@@ -1246,6 +1290,7 @@ impl eframe::App for ViewerApp {
             self.open(path, &ctx);
         }
         self.poll_loading(&ctx);
+        self.poll_qa();
         self.update_environment(&ctx);
 
         let dropped: Vec<PathBuf> = ctx.input(|i| {

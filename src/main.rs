@@ -9,6 +9,7 @@ mod i18n;
 mod icon;
 mod instance;
 mod navigation;
+mod qa;
 mod loader;
 mod render;
 mod scene;

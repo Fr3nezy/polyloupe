@@ -240,7 +240,24 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Theme" => "Tema",
         "Random" => "Casuale",
         "Options" => "Opzioni",
-        "Outline" => "Contorno",
+        "Object outlines" => "Contorni oggetti",
+        "Dark line around each object in Solid mode" => "Linea scura attorno a ogni oggetto in modalità Solido",
+        "Mesh Analysis" => "Analisi mesh",
+        "Mesh Check" => "Controllo mesh",
+        "Analyzing…" => "Analisi in corso…",
+        "Non-manifold edges" => "Spigoli non-manifold",
+        "Open edges" => "Spigoli aperti",
+        "Overlapping vertices" => "Vertici sovrapposti",
+        "Degenerate faces" => "Facce degeneri",
+        "Edges shared by more than two faces, or between faces with flipped normals" => {
+            "Spigoli condivisi da più di due facce, o tra facce con normali invertite"
+        }
+        "Edges with a single face: holes and open borders" => "Spigoli con una sola faccia: buchi e bordi aperti",
+        "Separate vertices closer than 0.1 mm, what Merge by Distance would weld" => {
+            "Vertici separati a meno di 0,1 mm, quelli che Merge by Distance salderebbe"
+        }
+        "Click to show them in the viewport" => "Clicca per vederli nella vista",
+        "No problems found: the mesh is closed and clean." => "Nessun problema: la mesh è chiusa e pulita.",
         "Lighting" => "Illuminazione",
         "Flat" => "Piatta",
         "Color" => "Colore",

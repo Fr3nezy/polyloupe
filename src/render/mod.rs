@@ -53,6 +53,54 @@ struct GlobalsUniform {
     wire_color: [f32; 4],
     selected_color: [f32; 4],
     active_color: [f32; 4],
+    viewport: [f32; 4],
+    markers: [u32; 4],
+}
+
+/// One mesh analysis marker (see `qa`): an edge from `a` to `b`, or a vertex at `a`.
+/// Skinning data travels along so markers follow the animation.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct MarkerInstance {
+    a: [f32; 3],
+    /// 0 non-manifold edge, 1 open edge, 2 overlapping vertex.
+    kind: u32,
+    b: [f32; 3],
+    _pad: u32,
+    joints_a: [u16; 4],
+    joints_b: [u16; 4],
+    weights_a: [f32; 4],
+    weights_b: [f32; 4],
+}
+
+/// Marker instances for one mesh.
+pub fn marker_instances(mesh: &crate::scene::Mesh, marks: &crate::qa::MeshMarks) -> Vec<MarkerInstance> {
+    let rig = &mesh.rig;
+    let skin = |v: u32| -> ([u16; 4], [f32; 4]) {
+        match (&rig.joints, &rig.weights) {
+            (Some(j), Some(w)) if rig.skin.is_some() => (j[v as usize], w[v as usize]),
+            _ => ([0; 4], [0.0; 4]),
+        }
+    };
+    let make = |kind: u32, a: u32, b: u32| {
+        let (joints_a, weights_a) = skin(a);
+        let (joints_b, weights_b) = skin(b);
+        MarkerInstance {
+            a: mesh.positions[a as usize],
+            kind,
+            b: mesh.positions[b as usize],
+            _pad: 0,
+            joints_a,
+            joints_b,
+            weights_a,
+            weights_b,
+        }
+    };
+    let mut out = Vec::with_capacity(marks.non_manifold.len() + marks.open.len() + marks.overlapping.len());
+    out.extend(marks.open.iter().map(|&[a, b]| make(1, a, b)));
+    out.extend(marks.non_manifold.iter().map(|&[a, b]| make(0, a, b)));
+    out.extend(marks.overlapping.iter().map(|&v| make(2, v, v)));
+    out
 }
 
 #[repr(C)]
@@ -104,6 +152,8 @@ struct GpuMesh {
     indices: wgpu::Buffer,
     index_count: u32,
     edges: Option<(wgpu::Buffer, u32)>,
+    /// Mesh analysis markers, filled in when the background analysis finishes.
+    markers: Option<(wgpu::Buffer, u32)>,
     material: usize,
     center: Vec3,
 }
@@ -145,6 +195,8 @@ struct Pipelines {
     surfaces: [SurfacePipelines; 2],
     wire: wgpu::RenderPipeline,
     wire_xray: wgpu::RenderPipeline,
+    marker: wgpu::RenderPipeline,
+    marker_hidden: wgpu::RenderPipeline,
     grid: wgpu::RenderPipeline,
     background: wgpu::RenderPipeline,
     id: wgpu::RenderPipeline,
@@ -543,6 +595,7 @@ impl Renderer {
                 indices: init("indices", bytemuck::cast_slice(&mesh.indices), index),
                 index_count: mesh.indices.len() as u32,
                 edges,
+                markers: None,
                 material,
                 center: mesh.bounds.transformed(&mesh.transform).center(),
             });
@@ -638,6 +691,32 @@ impl Renderer {
         if let Some(m) = self.meshes.get(index) {
             self.queue.write_buffer(&m.positions, 0, bytemuck::cast_slice(positions));
             self.queue.write_buffer(&m.normals, 0, bytemuck::cast_slice(normals));
+        }
+    }
+
+    /// Uploads the mesh analysis markers; `per_mesh[i]` belongs to mesh `i`.
+    pub fn set_markers(&mut self, per_mesh: &[Vec<MarkerInstance>]) {
+        for (mesh, instances) in self.meshes.iter_mut().zip(per_mesh) {
+            mesh.markers = (!instances.is_empty()).then(|| {
+                let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("markers"),
+                    contents: bytemuck::cast_slice(instances),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+                (buffer, instances.len() as u32)
+            });
+        }
+    }
+
+    fn draw_markers(&self, pass: &mut wgpu::RenderPass<'_>) {
+        for (i, m) in self.meshes.iter().enumerate() {
+            let Some((buffer, count)) = &m.markers else { continue };
+            if !self.visible.get(i).copied().unwrap_or(true) {
+                continue;
+            }
+            pass.set_bind_group(1, &self.object_bg, &[(i as u64 * self.object_stride) as u32]);
+            pass.set_vertex_buffer(0, buffer.slice(..));
+            pass.draw(0..6, 0..*count);
         }
     }
 
@@ -892,6 +971,8 @@ impl Renderer {
             wire_color: if wire_mode { [0.62, 0.62, 0.62, 1.0] } else { [0.0, 0.0, 0.0, 1.0] },
             selected_color: SELECTED,
             active_color: ACTIVE,
+            viewport: [size[0] as f32, size[1] as f32, 1.0 / size[0] as f32, 1.0 / size[1] as f32],
+            markers: [s.show_non_manifold as u32, s.show_open_edges as u32, s.show_overlapping as u32, 0],
         };
         self.queue.write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
 
@@ -1016,9 +1097,19 @@ impl Renderer {
                 pass.set_pipeline(if xray { &self.pipes.wire_xray } else { &self.pipes.wire });
                 self.draw_positions_only(&mut pass, true);
             }
+
+            // 6. Mesh analysis markers: faint where hidden, solid where visible.
+            if s.show_non_manifold || s.show_open_edges || s.show_overlapping {
+                pass.set_pipeline(&self.pipes.marker_hidden);
+                self.draw_markers(&mut pass);
+                if !xray {
+                    pass.set_pipeline(&self.pipes.marker);
+                    self.draw_markers(&mut pass);
+                }
+            }
         }
 
-        // 6. Outlines over the resolved image.
+        // 7. Outlines over the resolved image.
         if need_ids && (object_outline || any_selected) {
             let targets = self.targets.as_mut().expect("targets exist");
             if targets.outline_bg.is_none() {
@@ -1371,6 +1462,33 @@ fn create_pipelines(
         })
     };
 
+    // Markers read one instance per quad: endpoints, kind and skinning of both ends.
+    let marker_attrs = wgpu::vertex_attr_array![
+        0 => Float32x3, 1 => Uint32, 2 => Float32x3, 3 => Uint16x4, 4 => Uint16x4, 5 => Float32x4, 6 => Float32x4
+    ];
+    let marker_buffers = [Some(wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<MarkerInstance>() as u64,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &marker_attrs,
+    })];
+    let marker = |label, fs, compare| {
+        build(Desc {
+            label,
+            layout: &object_layout,
+            module: &mesh_module,
+            vs: "vs_marker",
+            fs,
+            buffers: &marker_buffers,
+            topology: Topo::TriangleList,
+            depth: Some((false, compare)),
+            cull: None,
+            samples: SAMPLES,
+            format: COLOR_FORMAT,
+            blend: alpha,
+            write_mask: all,
+        })
+    };
+
     Pipelines {
         surfaces: [None, Some(wgpu::Face::Back)].map(|cull| SurfacePipelines {
             opaque: mesh("mesh", (true, Cmp::Greater), None, all, cull),
@@ -1380,6 +1498,8 @@ fn create_pipelines(
         }),
         wire: wire("wire", Cmp::GreaterEqual),
         wire_xray: wire("wire xray", Cmp::Always),
+        marker: marker("markers", "fs_marker", Cmp::GreaterEqual),
+        marker_hidden: marker("markers hidden", "fs_marker_hidden", Cmp::Always),
         grid: build(Desc {
             label: "grid",
             layout: &globals_layout,
