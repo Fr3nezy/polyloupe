@@ -49,6 +49,8 @@ struct ObjectMeta {
     /// World-space bounds.
     bounds: Aabb,
     material: usize,
+    /// Pivot (object origin) in world space, rest pose.
+    origin: Vec3,
 }
 
 struct MaterialMeta {
@@ -68,6 +70,7 @@ struct SceneInfo {
     vertices: usize,
     triangles: usize,
     load_time: Duration,
+    units: crate::scene::Units,
     /// Mesh analysis, filled in by a background thread shortly after loading.
     qa: Option<qa::Report>,
 }
@@ -1278,6 +1281,7 @@ impl ViewerApp {
             self.render_compare(ui, frame, rect);
             self.draw_measures(ui, rect_a);
             self.draw_section(ui, rect_a);
+            self.draw_origins(ui, rect_a);
 
             let overlays = self.settings.show_overlays;
             if overlays {
@@ -1665,11 +1669,13 @@ fn scene_info(scene: &Scene, path: &Path, load_time: Duration) -> SceneInfo {
                 vertices: m.positions.len(),
                 bounds: m.bounds.transformed(&m.transform),
                 material: m.material.min(scene.materials.len() - 1),
+                origin: m.transform.w_axis.truncate(),
             })
             .collect(),
         vertices: scene.source_vertex_count,
         triangles: scene.triangle_count(),
         load_time,
+        units: scene.units,
         qa: None,
     }
 }

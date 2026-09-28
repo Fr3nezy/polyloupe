@@ -308,6 +308,20 @@ pub struct Scene {
     /// Non-fatal problems worth telling the user about (e.g. missing textures).
     pub warnings: Vec<String>,
     pub animation: Animation,
+    /// Units the file declares (the scene itself is always in meters).
+    pub units: Units,
+}
+
+/// What a file says about its units.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum Units {
+    /// The format doesn't store units (OBJ, STL): read as meters.
+    #[default]
+    Undeclared,
+    /// Meters by definition (glTF).
+    Meters,
+    /// Declared by the file: meters per file unit (FBX: 0.01 = centimeters).
+    Declared(f64),
 }
 
 /// Node hierarchy, skins and clips. Empty for static files.
@@ -422,6 +436,7 @@ impl Scene {
             source_vertex_count,
             warnings: Vec::new(),
             animation: Animation::default(),
+            units: Units::Undeclared,
         }
     }
 

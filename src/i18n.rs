@@ -258,6 +258,39 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Swap A and B" => "Scambia A e B",
         "Close the comparison" => "Chiudi il confronto",
         "Comparison" => "Confronto",
+        "Origins" => "Origini",
+        "Each object's pivot as a dot, like Blender" => "Il pivot di ogni oggetto come un punto, come in Blender",
+        "Pivot" => "Pivot",
+        "Unknown" => "Sconosciuto",
+        "Outside the model" => "Fuori dal modello",
+        "Bottom center" => "Base, centrato",
+        "Center" => "Centro",
+        "Top center" => "Cima, centrato",
+        "Off center" => "Decentrato",
+        "Meters" => "Metri",
+        "Centimeters" => "Centimetri",
+        "Millimeters" => "Millimetri",
+        "Inches" => "Pollici",
+        "Feet" => "Piedi",
+        "Kilometers" => "Chilometri",
+        "Meters (glTF)" => "Metri (glTF)",
+        "Not stored (m)" => "Non salvate (m)",
+        "On the floor" => "Sul pavimento",
+        "Floating {d} above" => "Sollevato di {d}",
+        "{d} below the floor" => "{d} sotto il pavimento",
+        "Scale" => "Scala",
+        "File units" => "Unità del file",
+        "World origin" => "Origine del mondo",
+        "Ground" => "Appoggio",
+        "{size} across: huge for a single asset. If it was modeled in centimeters and read as meters, it's 100× too big ({real})." => {
+            "{size} di lato: enorme per un asset singolo. Se era modellato in centimetri e letto come metri, è 100× troppo grande ({real})."
+        }
+        "{size} across: tiny. If it was modeled in meters and exported as millimeters, it's 1000× too small ({real})." => {
+            "{size} di lato: minuscolo. Se era modellato in metri ed esportato come millimetri, è 1000× troppo piccolo ({real})."
+        }
+        "This format doesn't store units. If the author worked in millimeters (common for STL), the real size is {real}." => {
+            "Questo formato non salva le unità. Se l'autore lavorava in millimetri (comune per gli STL), la dimensione reale è {real}."
+        }
         "Normals" => "Normali",
         "A line along each vertex normal" => "Una linea lungo la normale di ogni vertice",
         "Length" => "Lunghezza",

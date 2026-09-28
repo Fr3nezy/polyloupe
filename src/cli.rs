@@ -100,6 +100,7 @@ impl CaptureOptions {
                 "--sidebar" => s.show_sidebar = true,
                 "--no-outline" => s.show_outline = false,
                 "--normals" => s.show_normals = true,
+                "--origins" => s.show_origins = true,
                 "--face-orientation" => s.show_face_orientation = true,
                 "--mesh-check" => {
                     s.show_non_manifold = true;
@@ -205,7 +206,7 @@ pub fn parse() -> Result<LaunchOptions, String> {
                 capture.settings.push((arg, Some(v)));
             }
             "--xray" | "--no-xray" | "--wire-overlay" | "--no-grid" | "--fps" | "--env-bg" | "--sidebar"
-            | "--no-outline" | "--mesh-check" | "--normals" | "--face-orientation" => capture.settings.push((arg, None)),
+            | "--no-outline" | "--mesh-check" | "--normals" | "--face-orientation" | "--origins" => capture.settings.push((arg, None)),
             flag if flag.starts_with("--") => return Err(format!("unknown option {flag}")),
             _ => opts.open = Some(PathBuf::from(arg)),
         }

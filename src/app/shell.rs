@@ -638,6 +638,36 @@ impl ViewerApp {
         }
     }
 
+    /// Object origins as dots (selected ones in the selection colors), like Blender.
+    pub(super) fn draw_origins(&self, ui: &Ui, viewport: Rect) {
+        let Some(info) = &self.info else { return };
+        if !(self.settings.show_origins && self.settings.show_overlays) {
+            return;
+        }
+        let aspect = viewport.width() / viewport.height().max(1.0);
+        let view_proj = self.camera.projection(aspect) * self.camera.view_matrix();
+        let painter = ui.painter().with_clip_rect(viewport);
+        for (i, o) in info.objects.iter().enumerate() {
+            if !self.visible.get(i).copied().unwrap_or(true) {
+                continue;
+            }
+            let c = view_proj * o.origin.extend(1.0);
+            if c.w <= 1e-6 {
+                continue;
+            }
+            let n = c.truncate() / c.w;
+            let at = pos2(viewport.left() + (n.x * 0.5 + 0.5) * viewport.width(), viewport.top() + (0.5 - n.y * 0.5) * viewport.height());
+            let fill = if self.selection.active == Some(i) {
+                Color32::from_rgb(0xff, 0xab, 0x40)
+            } else if self.selection.selected.get(i).copied().unwrap_or(false) {
+                theme::SELECTION
+            } else {
+                theme::TEXT
+            };
+            painter.circle(at, 3.5, fill, Stroke::new(1.5, Color32::from_black_alpha(200)));
+        }
+    }
+
     /// Outline of the section plane across the scene bounds.
     pub(super) fn draw_section(&self, ui: &Ui, viewport: Rect) {
         let (Some(s), Some(plane)) = (self.section, self.section_plane()) else { return };
@@ -927,14 +957,44 @@ impl ViewerApp {
         });
         ui.add_space(12.0);
 
+        // Scale: declared units, where the scene origin sits, and a sanity check on size.
+        let bounds = self.visible_bounds(false);
+        let units = match info.units {
+            crate::scene::Units::Meters => tr("Meters (glTF)").to_string(),
+            crate::scene::Units::Undeclared => tr("Not stored (m)").to_string(),
+            crate::scene::Units::Declared(m) => unit_name(m),
+        };
+        let floor = if !bounds.is_valid() {
+            String::new()
+        } else if bounds.min.z.abs() <= bounds.size().z.max(1e-6) * 0.01 {
+            tr("On the floor").to_string()
+        } else if bounds.min.z > 0.0 {
+            trf("Floating {d} above", &[("d", &fmt_len(bounds.min.z))])
+        } else {
+            trf("{d} below the floor", &[("d", &fmt_len(-bounds.min.z))])
+        };
+        let origin = tr(pivot_place(Vec3::ZERO, &bounds)).to_string();
+        widgets::section(ui, "Scale");
+        table(ui, |t| {
+            t.row("File units", &units);
+            t.row("World origin", &origin);
+            t.row("Ground", &floor);
+        });
+        if let Some(note) = scale_note(bounds.size().max_element(), info.units) {
+            ui.add(egui::Label::new(RichText::new(note).size(11.5).color(theme::TEXT_DIM)).wrap());
+        }
+        ui.add_space(12.0);
+
         if let Some(o) = active {
             widgets::section(ui, "Object");
             let material = &info.materials[o.material].name;
+            let pivot = tr(pivot_place(o.origin, &o.bounds)).to_string();
             table(ui, |t| {
                 t.row("Name", &o.name);
                 t.row("Triangles", &thousands(o.triangles));
                 t.row("Vertices", &thousands(o.vertices));
                 t.row("Material", material);
+                t.row("Pivot", &pivot);
             });
             ui.add_space(12.0);
         }
@@ -1359,6 +1419,59 @@ impl ViewerApp {
 }
 
 /// Keeps the end of a long path: "…\GitHub\project\assets".
+/// Where a pivot sits relative to bounds: the spots game engines and DCCs care about.
+fn pivot_place(p: Vec3, b: &Aabb) -> &'static str {
+    if !b.is_valid() {
+        return "Unknown";
+    }
+    let size = b.size().max(Vec3::splat(1e-6));
+    let rel = (p - b.min) / size;
+    if rel.min_element() < -0.1 || rel.max_element() > 1.1 {
+        return "Outside the model";
+    }
+    let centered = (rel.x - 0.5).abs() < 0.1 && (rel.y - 0.5).abs() < 0.1;
+    match (centered, rel.z) {
+        (true, z) if z < 0.1 => "Bottom center",
+        (true, z) if (z - 0.5).abs() < 0.1 => "Center",
+        (true, z) if z > 0.9 => "Top center",
+        _ => "Off center",
+    }
+}
+
+fn unit_name(meters: f64) -> String {
+    let known = [(1.0, "Meters"), (0.01, "Centimeters"), (0.001, "Millimeters"), (0.0254, "Inches"), (0.3048, "Feet"), (1000.0, "Kilometers")];
+    match known.iter().find(|(m, _)| (meters / m - 1.0).abs() < 1e-3) {
+        Some((_, name)) => format!("{} (FBX)", tr(name)),
+        None => format!("{} m (FBX)", crate::i18n::decimal(format!("{meters}"))),
+    }
+}
+
+/// A hint when the size looks like a units mix-up (the classic 100x FBX).
+fn scale_note(largest: f32, units: crate::scene::Units) -> Option<String> {
+    if !(largest > 0.0) {
+        return None;
+    }
+    if largest > 100.0 {
+        return Some(trf(
+            "{size} across: huge for a single asset. If it was modeled in centimeters and read as meters, it's 100× too big ({real}).",
+            &[("size", &fmt_len(largest)), ("real", &fmt_len(largest / 100.0))],
+        ));
+    }
+    if largest < 0.005 {
+        return Some(trf(
+            "{size} across: tiny. If it was modeled in meters and exported as millimeters, it's 1000× too small ({real}).",
+            &[("size", &fmt_len(largest)), ("real", &fmt_len(largest * 1000.0))],
+        ));
+    }
+    if units == crate::scene::Units::Undeclared && largest > 10.0 {
+        return Some(trf(
+            "This format doesn't store units. If the author worked in millimeters (common for STL), the real size is {real}.",
+            &[("real", &fmt_len(largest / 1000.0))],
+        ));
+    }
+    None
+}
+
 fn elide_start(text: &str, max_chars: usize) -> String {
     let count = text.chars().count();
     if count <= max_chars {
