@@ -22,6 +22,10 @@ struct Globals {
     wire_color: vec4<f32>,
     selected_color: vec4<f32>,
     active_color: vec4<f32>,
+    // xy: viewport size in pixels, zw: 1 / size.
+    viewport: vec4<f32>,
+    // Mesh analysis markers shown: x non-manifold edges, y open edges, z overlapping vertices.
+    markers: vec4<u32>,
 };
 
 const PI: f32 = 3.14159265;

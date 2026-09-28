@@ -31,6 +31,10 @@ pub const ERROR: Color32 = Color32::from_rgb(0xe5, 0x48, 0x4d);
 pub const VIEWPORT: Color32 = Color32::from_rgb(0x26, 0x26, 0x26);
 /// Selection in the 3D view and outliner stays Blender orange: it is information, not chrome.
 pub const SELECTION: Color32 = Color32::from_rgb(0xe0, 0x89, 0x2a);
+/// Mesh analysis markers; keep in sync with `marker_color` in mesh.wgsl.
+pub const MARK_NON_MANIFOLD: Color32 = Color32::from_rgb(0xff, 0x2e, 0x78);
+pub const MARK_OPEN: Color32 = Color32::from_rgb(0xff, 0xc2, 0x33);
+pub const MARK_OVERLAP: Color32 = Color32::from_rgb(0x33, 0xdb, 0xff);
 
 pub const AXIS_X: Color32 = Color32::from_rgb(0xe5, 0x48, 0x4d);
 pub const AXIS_Y: Color32 = Color32::from_rgb(0x46, 0xa7, 0x58);

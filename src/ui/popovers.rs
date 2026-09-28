@@ -92,6 +92,20 @@ pub fn overlays(ui: &mut Ui, s: &mut Settings) {
         ui.add_enabled_ui(s.shading != ShadingMode::Wireframe, |ui| {
             ui.checkbox(&mut s.show_wire_overlay, tr("Wireframe"));
         });
+        ui.add_enabled_ui(s.shading == ShadingMode::Solid, |ui| {
+            ui.checkbox(&mut s.show_outline, tr("Object outlines"))
+                .on_hover_text(tr("Dark line around each object in Solid mode"));
+        });
+    });
+    ui.separator();
+    widgets::section(ui, "Mesh Analysis");
+    ui.add_enabled_ui(s.show_overlays, |ui| {
+        marker_toggle(ui, &mut s.show_non_manifold, "Non-manifold edges", theme::MARK_NON_MANIFOLD)
+            .on_hover_text(tr("Edges shared by more than two faces, or between faces with flipped normals"));
+        marker_toggle(ui, &mut s.show_open_edges, "Open edges", theme::MARK_OPEN)
+            .on_hover_text(tr("Edges with a single face: holes and open borders"));
+        marker_toggle(ui, &mut s.show_overlapping, "Overlapping vertices", theme::MARK_OVERLAP)
+            .on_hover_text(tr("Separate vertices closer than 0.1 mm, what Merge by Distance would weld"));
     });
     ui.separator();
     widgets::section(ui, "Performance");
@@ -130,10 +144,18 @@ pub fn shading(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails) -> Option
     if s.shading != ShadingMode::Wireframe {
         ui.checkbox(&mut s.backface_culling, tr("Backface culling"));
     }
-    if s.shading == ShadingMode::Solid {
-        ui.checkbox(&mut s.show_outline, tr("Outline"));
-    }
     action
+}
+
+/// Checkbox with the marker color as a swatch after the label.
+pub fn marker_toggle(ui: &mut Ui, value: &mut bool, label: &str, color: Color32) -> egui::Response {
+    ui.horizontal(|ui| {
+        let r = ui.checkbox(value, tr(label));
+        let (rect, _) = ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
+        ui.painter().rect_filled(rect, CornerRadius::same(2), color);
+        r
+    })
+    .inner
 }
 
 fn solid(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails) {

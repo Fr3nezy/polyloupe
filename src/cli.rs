@@ -90,6 +90,11 @@ impl CaptureOptions {
                 "--transparent" => s.export_transparent = true,
                 "--sidebar" => s.show_sidebar = true,
                 "--no-outline" => s.show_outline = false,
+                "--mesh-check" => {
+                    s.show_non_manifold = true;
+                    s.show_open_edges = true;
+                    s.show_overlapping = true;
+                }
                 "--xray" => {
                     s.xray_solid = true;
                     s.xray_wire = true;
@@ -167,7 +172,7 @@ pub fn parse() -> Result<LaunchOptions, String> {
                 capture.settings.push((arg, Some(v)));
             }
             "--xray" | "--no-xray" | "--wire-overlay" | "--no-grid" | "--fps" | "--env-bg" | "--sidebar"
-            | "--no-outline" => capture.settings.push((arg, None)),
+            | "--no-outline" | "--mesh-check" => capture.settings.push((arg, None)),
             flag if flag.starts_with("--") => return Err(format!("unknown option {flag}")),
             _ => opts.open = Some(PathBuf::from(arg)),
         }

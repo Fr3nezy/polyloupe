@@ -344,6 +344,93 @@ fn fs_wire() -> @location(0) vec4<f32> {
     return vec4<f32>(rgb, a);
 }
 
+// --- Mesh analysis markers (see qa.rs) ---
+// One instance per marker, drawn as a screen-space quad so edges are thick and vertices are
+// squares at any zoom. Kind 0: non-manifold edge, 1: open edge, 2: overlapping vertex.
+
+struct MarkerOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) @interpolate(flat) kind: u32,
+    @location(1) local: vec2<f32>,
+};
+
+@vertex
+fn vs_marker(
+    @builtin(vertex_index) vi: u32,
+    @location(0) a: vec3<f32>,
+    @location(1) kind: u32,
+    @location(2) b: vec3<f32>,
+    @location(3) ja: vec4<u32>,
+    @location(4) jb: vec4<u32>,
+    @location(5) wa: vec4<f32>,
+    @location(6) wb: vec4<f32>,
+) -> MarkerOut {
+    var out: MarkerOut;
+    out.kind = kind;
+    out.local = vec2<f32>(0.0);
+    let shown = (kind == 0u && g.markers.x != 0u) || (kind == 1u && g.markers.y != 0u)
+        || (kind == 2u && g.markers.z != 0u);
+    let ca = g.view_proj * (vertex_matrix(ja, wa) * vec4<f32>(a, 1.0));
+    let cb = g.view_proj * (vertex_matrix(jb, wb) * vec4<f32>(b, 1.0));
+    if !shown || ca.w <= 0.0 || cb.w <= 0.0 {
+        // Every corner at the same point outside the view: nothing is drawn.
+        out.clip = vec4<f32>(2.0, 2.0, 0.5, 1.0);
+        return out;
+    }
+    var corners = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
+        vec2<f32>(0.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0),
+    );
+    let c = corners[vi];
+    let ndc_per_px = 2.0 * g.viewport.zw;
+    var clip: vec4<f32>;
+    if kind == 2u {
+        let side = vec2<f32>(c.x * 2.0 - 1.0, c.y);
+        clip = ca + vec4<f32>(side * 4.0 * ndc_per_px * ca.w, 0.0, 0.0);
+        out.local = side;
+    } else {
+        var dir = (cb.xy / cb.w - ca.xy / ca.w) * g.viewport.xy;
+        dir = select(normalize(dir), vec2<f32>(1.0, 0.0), length(dir) < 1e-4);
+        let normal = vec2<f32>(-dir.y, dir.x);
+        let half = 1.5;
+        let base = select(ca, cb, c.x > 0.5);
+        let offset = (normal * c.y + dir * (c.x * 2.0 - 1.0)) * half * ndc_per_px;
+        clip = base + vec4<f32>(offset * base.w, 0.0, 0.0);
+        out.local = vec2<f32>(0.0, c.y);
+    }
+    clip.z = clip.z * 1.0008 + 1e-7 * clip.w;
+    out.clip = clip;
+    return out;
+}
+
+fn marker_color(kind: u32) -> vec3<f32> {
+    switch kind {
+        case 0u: { return srgb_to_linear(vec3<f32>(1.0, 0.18, 0.47)); }
+        case 1u: { return srgb_to_linear(vec3<f32>(1.0, 0.76, 0.2)); }
+        default: { return srgb_to_linear(vec3<f32>(0.2, 0.86, 1.0)); }
+    }
+}
+
+fn marker(in: MarkerOut, alpha: f32) -> vec4<f32> {
+    var rgb = marker_color(in.kind);
+    // Vertices get a dark rim so they read on any surface color.
+    if in.kind == 2u && max(abs(in.local.x), abs(in.local.y)) > 0.62 {
+        rgb = vec3<f32>(0.0);
+    }
+    return vec4<f32>(rgb, alpha);
+}
+
+@fragment
+fn fs_marker(in: MarkerOut) -> @location(0) vec4<f32> {
+    return marker(in, 1.0);
+}
+
+// Markers behind surfaces stay faintly visible, so hidden problems aren't missed.
+@fragment
+fn fs_marker_hidden(in: MarkerOut) -> @location(0) vec4<f32> {
+    return marker(in, 0.28);
+}
+
 // --- Object ids (picking and outlines) ---
 
 @vertex
