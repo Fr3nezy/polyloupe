@@ -247,6 +247,7 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Cancel point" => "Annulla punto",
         "Clear measurements" => "Cancella misure",
         "Back to select" => "Torna a Seleziona",
+        "No vertex snap" => "Senza snap ai vertici",
         "Del" => "Canc",
         "Dark line around each object in Solid mode" => "Linea scura attorno a ogni oggetto in modalità Solido",
         "Mesh Analysis" => "Analisi mesh",

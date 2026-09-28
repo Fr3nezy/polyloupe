@@ -14,6 +14,7 @@ mod loader;
 mod render;
 mod scene;
 mod settings;
+mod snap;
 mod thumbnail;
 mod ui;
 
