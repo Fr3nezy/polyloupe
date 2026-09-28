@@ -94,6 +94,19 @@ fn server_record() -> Option<PathBuf> {
     Some(PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Poly Loupe").join("thumbnail-server"))
 }
 
+/// Appends to `%LOCALAPPDATA%\Poly Loupe	humbs.log` when a `thumbs-debug` file exists next to
+/// it (the Explorer handler logs to the same file), to trace what Explorer asks for.
+fn debug_log(message: impl FnOnce() -> String) {
+    let Some(dir) = server_record().and_then(|r| r.parent().map(Path::to_path_buf)) else { return };
+    if !dir.join("thumbs-debug").exists() {
+        return;
+    }
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("thumbs.log")) {
+        let _ = writeln!(f, "{secs:.3} server:{} {}", std::process::id(), message());
+    }
+}
+
 /// Runs the thumbnail server until it has been idle for [`IDLE_EXIT`].
 pub fn serve() -> Result<(), String> {
     let record = server_record().ok_or("LOCALAPPDATA isn't set")?;
@@ -159,10 +172,16 @@ fn handle(stream: TcpStream, token: &str, thumbnailer: &Mutex<Thumbnailer>) {
         return;
     }
     let size = size.parse().unwrap_or(256);
+    let started = Instant::now();
+    debug_log(|| format!("request {size}px {path}"));
     // Parsing runs in parallel on each connection's thread; only the GPU part is serialized.
     let result = loader::load(Path::new(&path)).and_then(|scene| match thumbnailer.lock() {
         Ok(mut t) => t.render(&scene, size),
         Err(_) => Err("thumbnailer poisoned".into()),
+    });
+    debug_log(|| match &result {
+        Ok(_) => format!("ok in {} ms: {path}", started.elapsed().as_millis()),
+        Err(e) => format!("FAILED in {} ms: {path}: {e}", started.elapsed().as_millis()),
     });
     let mut out = &stream;
     let _ = match result {
