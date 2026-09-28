@@ -22,6 +22,7 @@ const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const EGUI_VIEW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const ID_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Uint;
+const PICK_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 const SAMPLES: u32 = 4;
 
 /// Viewport background, sRGB.
@@ -180,6 +181,8 @@ struct Targets {
     id_tex: wgpu::Texture,
     id: wgpu::TextureView,
     id_depth: wgpu::TextureView,
+    pick_depth_tex: wgpu::Texture,
+    pick_depth: wgpu::TextureView,
     outline_bg: Option<wgpu::BindGroup>,
 }
 
@@ -242,6 +245,8 @@ pub struct Renderer {
     objects_dirty: bool,
     /// Result of the last pick request: `Some(None)` means "clicked empty space".
     pub picked: Option<Option<usize>>,
+    /// World position under the last pick pixel, when it hit a surface.
+    pub picked_point: Option<Option<Vec3>>,
 }
 
 impl Renderer {
@@ -411,7 +416,8 @@ impl Renderer {
         let selection_buf = create_selection_buffer(device, 1);
         let pick_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("pick"),
-            size: 256,
+            // Object id at 0, depth at 256 (copies need 256-byte aligned rows).
+            size: 512,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -445,6 +451,7 @@ impl Renderer {
             pick_buf,
             targets: None,
             texture_id: None,
+            picked_point: None,
             meshes: Vec::new(),
             objects: Vec::new(),
             zero_buf: None,
@@ -814,6 +821,8 @@ impl Renderer {
             &[],
         );
         let id_depth = make("id depth", DEPTH_FORMAT, 1, attach, &[]);
+        // Depth textures can't be copied one pixel at a time: the id pass writes depth here too.
+        let pick_depth = make("pick depth", PICK_DEPTH_FORMAT, 1, attach | wgpu::TextureUsages::COPY_SRC, &[]);
         let resolve_egui = resolve.create_view(&wgpu::TextureViewDescriptor {
             format: Some(EGUI_VIEW_FORMAT),
             ..Default::default()
@@ -844,6 +853,8 @@ impl Renderer {
             id: id_tex.create_view(&Default::default()),
             id_tex,
             id_depth: id_depth.create_view(&Default::default()),
+            pick_depth: pick_depth.create_view(&Default::default()),
+            pick_depth_tex: pick_depth,
             outline_bg: None,
         });
     }
@@ -987,6 +998,14 @@ impl Renderer {
                 label: Some("ids"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &targets.id,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                }), Some(wgpu::RenderPassColorAttachment {
+                    view: &targets.pick_depth,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -1161,11 +1180,40 @@ impl Renderer {
                 },
                 wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
             );
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &targets.pick_depth_tex,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: p[0], y: p[1], z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &self.pick_buf,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 256,
+                        bytes_per_row: Some(256),
+                        rows_per_image: Some(1),
+                    },
+                },
+                wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            );
         }
         self.queue.submit(Some(encoder.finish()));
 
-        if pick.is_some() {
-            self.picked = Some(self.read_pick());
+        if let Some(p) = pick {
+            let (object, depth) = self.read_pick();
+            self.picked = Some(object);
+            // Reverse-Z: 0 is the far plane, i.e. nothing under the cursor.
+            self.picked_point = Some((object.is_some() && depth > 0.0).then(|| {
+                let ndc = glam::Vec4::new(
+                    (p[0] as f32 + 0.5) / size[0] as f32 * 2.0 - 1.0,
+                    1.0 - (p[1] as f32 + 0.5) / size[1] as f32 * 2.0,
+                    depth,
+                    1.0,
+                );
+                let world = view_proj.inverse() * ndc;
+                world.truncate() / world.w
+            }));
         }
         self.texture_id
     }
@@ -1209,16 +1257,20 @@ impl Renderer {
     }
 
     /// Blocks briefly for the one-pixel readback. Only happens on click.
-    fn read_pick(&self) -> Option<usize> {
+    /// Object under the pick pixel and its depth (0 when nothing was hit).
+    fn read_pick(&self) -> (Option<usize>, f32) {
         let slice = self.pick_buf.slice(..);
         slice.map_async(wgpu::MapMode::Read, |_| {});
         let _ = self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-        let id = match slice.get_mapped_range() {
-            Ok(data) => u32::from_le_bytes([data[0], data[1], data[2], data[3]]),
-            Err(_) => 0,
+        let (id, depth) = match slice.get_mapped_range() {
+            Ok(data) => (
+                u32::from_le_bytes([data[0], data[1], data[2], data[3]]),
+                f32::from_le_bytes([data[256], data[257], data[258], data[259]]),
+            ),
+            Err(_) => (0, 0.0),
         };
         self.pick_buf.unmap();
-        (id > 0).then(|| id as usize - 1)
+        ((id > 0).then(|| id as usize - 1), depth)
     }
 }
 
@@ -1388,6 +1440,8 @@ fn create_pipelines(
         format: wgpu::TextureFormat,
         blend: Option<wgpu::BlendState>,
         write_mask: wgpu::ColorWrites,
+        /// Extra color target (the id pass also writes depth for picking).
+        second: Option<wgpu::TextureFormat>,
     }
     let build = |d: Desc| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1412,11 +1466,10 @@ fn create_pipelines(
                 module: d.module,
                 entry_point: Some(d.fs),
                 compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: d.format,
-                    blend: d.blend,
-                    write_mask: d.write_mask,
-                })],
+                targets: &[
+                    Some(wgpu::ColorTargetState { format: d.format, blend: d.blend, write_mask: d.write_mask }),
+                    d.second.map(|format| wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL }),
+                ][..1 + d.second.is_some() as usize],
             }),
             multiview_mask: None,
             cache: None,
@@ -1442,6 +1495,7 @@ fn create_pipelines(
             format: COLOR_FORMAT,
             blend,
             write_mask,
+            second: None,
         })
     };
     let wire = |label, compare| {
@@ -1459,6 +1513,7 @@ fn create_pipelines(
             format: COLOR_FORMAT,
             blend: alpha,
             write_mask: all,
+            second: None,
         })
     };
 
@@ -1486,6 +1541,7 @@ fn create_pipelines(
             format: COLOR_FORMAT,
             blend: alpha,
             write_mask: all,
+            second: None,
         })
     };
 
@@ -1514,6 +1570,7 @@ fn create_pipelines(
             format: COLOR_FORMAT,
             blend: alpha,
             write_mask: all,
+            second: None,
         }),
         background: build(Desc {
             label: "background",
@@ -1529,6 +1586,7 @@ fn create_pipelines(
             format: COLOR_FORMAT,
             blend: None,
             write_mask: all,
+            second: None,
         }),
         id: build(Desc {
             label: "ids",
@@ -1544,6 +1602,7 @@ fn create_pipelines(
             format: ID_FORMAT,
             blend: None,
             write_mask: all,
+            second: Some(PICK_DEPTH_FORMAT),
         }),
         outline: build(Desc {
             label: "outline",
@@ -1559,6 +1618,7 @@ fn create_pipelines(
             format: COLOR_FORMAT,
             blend: alpha,
             write_mask: all,
+            second: None,
         }),
     }
 }

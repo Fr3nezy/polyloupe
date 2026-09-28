@@ -10,6 +10,7 @@ use eframe::egui::{
     PointerButton, Pos2, Rect, RectAlign, RichText, Sense, Stroke, StrokeKind, TextureHandle,
     TextureOptions, Ui, UiBuilder, pos2, vec2,
 };
+use glam::Vec3;
 use eframe::egui_wgpu;
 
 mod shell;
@@ -66,6 +67,16 @@ struct SceneInfo {
     load_time: Duration,
     /// Mesh analysis, filled in by a background thread shortly after loading.
     qa: Option<qa::Report>,
+}
+
+/// What a GPU pick is for.
+#[derive(Clone, Copy)]
+enum PickPurpose {
+    Select { extend: bool },
+    /// Place a measurement point.
+    MeasureClick,
+    /// Rubber band to the cursor while the second point is pending.
+    MeasureHover,
 }
 
 /// Blender-style selection: a set plus one active object.
@@ -170,7 +181,13 @@ pub struct ViewerApp {
     fps: f32,
     thumbs: Thumbnails,
     pending_open: Option<PathBuf>,
-    pending_pick: Option<([u32; 2], bool)>,
+    pending_pick: Option<([u32; 2], PickPurpose)>,
+    /// Finished measurements (world points) and the one being placed.
+    measures: Vec<[Vec3; 2]>,
+    measure_start: Option<Vec3>,
+    /// Surface point under the cursor while a measurement is being placed.
+    measure_hover: Option<Vec3>,
+    measure_hover_px: Option<[u32; 2]>,
     env_loaded: Option<Environment>,
     env_loading: Option<(Environment, Receiver<Result<EnvImage, String>>)>,
     capture: Option<CaptureState>,
@@ -237,6 +254,10 @@ impl ViewerApp {
             thumbs: Thumbnails::default(),
             pending_open: launch.open,
             pending_pick: None,
+            measures: Vec::new(),
+            measure_start: None,
+            measure_hover: None,
+            measure_hover_px: None,
             env_loaded: None,
             env_loading: None,
             capture: launch.capture.map(|opts| CaptureState { opts, frames: 0, requested: false }),
@@ -569,6 +590,8 @@ impl ViewerApp {
             })
             .collect();
         self.selection.reset(objects.len());
+        self.measures.clear();
+        self.cancel_measure();
         self.visible = vec![true; objects.len()];
         self.pass_override = vec![None; objects.len()];
         let missing: Vec<String> = scene
@@ -619,6 +642,12 @@ impl ViewerApp {
                 ctx.request_repaint();
             }
         });
+    }
+
+    fn cancel_measure(&mut self) {
+        self.measure_start = None;
+        self.measure_hover = None;
+        self.measure_hover_px = None;
     }
 
     fn poll_qa(&mut self) {
@@ -878,7 +907,7 @@ impl ViewerApp {
             return;
         }
         let pressed = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
-        for (key, tool) in [(Key::Q, Tool::Select), (Key::O, Tool::Orbit), (Key::G, Tool::Pan)] {
+        for (key, tool) in [(Key::Q, Tool::Select), (Key::O, Tool::Orbit), (Key::G, Tool::Pan), (Key::M, Tool::Measure)] {
             if pressed(Modifiers::NONE, key) {
                 self.tool = tool;
             }
@@ -914,6 +943,14 @@ impl ViewerApp {
         }
         if pressed(Modifiers::NONE, Key::C) {
             self.cycle_channel(true);
+        }
+        // Measure: Esc drops the point being placed, Delete clears every measurement.
+        if self.measure_start.is_some() && pressed(Modifiers::NONE, Key::Escape) {
+            self.cancel_measure();
+        }
+        if !self.measures.is_empty() && (pressed(Modifiers::NONE, Key::Delete) || pressed(Modifiers::NONE, Key::Backspace)) {
+            self.measures.clear();
+            self.cancel_measure();
         }
         if pressed(Modifiers::SHIFT, Key::C) {
             self.cycle_channel(false);
@@ -1025,6 +1062,7 @@ impl ViewerApp {
             Tool::Orbit => Some(Gesture::Orbit),
             Tool::Pan => Some(Gesture::Pan),
             Tool::Zoom => Some(Gesture::Zoom),
+            Tool::Measure => None,
         };
         let gesture = nav.gesture(drag).or(tool_gesture);
         let d = response.drag_delta() * ppp;
@@ -1069,12 +1107,31 @@ impl ViewerApp {
                 self.camera.zoom(pinch.ln() / (1.0f32 / 0.85).ln());
             }
         }
-        // Click to select (not with Alt, which is navigation in most presets; not on a drag).
+        let to_px = |pos: Pos2| {
+            let p = (pos - viewport.min) * ppp;
+            [p.x.max(0.0) as u32, p.y.max(0.0) as u32]
+        };
+        // Click to select or place a measurement point (not with Alt, which is navigation in
+        // most presets; not on a drag).
         if response.clicked_by(PointerButton::Primary) && !mods.alt && self.info.is_some() {
             if let Some(pos) = response.interact_pointer_pos() {
-                let p = (pos - viewport.min) * ppp;
-                self.pending_pick = Some(([p.x.max(0.0) as u32, p.y.max(0.0) as u32], mods.shift));
+                let purpose = if self.tool == Tool::Measure {
+                    PickPurpose::MeasureClick
+                } else {
+                    PickPurpose::Select { extend: mods.shift }
+                };
+                self.pending_pick = Some((to_px(pos), purpose));
             }
+        } else if self.tool == Tool::Measure && self.measure_start.is_some() && self.pending_pick.is_none() {
+            // Follow the cursor with a pick only when it moves: each pick waits for the GPU.
+            let hover = response.hover_pos().map(to_px);
+            if hover.is_some() && hover != self.measure_hover_px {
+                self.measure_hover_px = hover;
+                self.pending_pick = hover.map(|p| (p, PickPurpose::MeasureHover));
+            }
+        }
+        if self.tool == Tool::Measure && response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         }
     }
 
@@ -1097,6 +1154,7 @@ impl ViewerApp {
                 ctx.request_repaint();
             }
             self.render_viewport(ui, frame, rect);
+            self.draw_measures(ui, rect);
 
             let overlays = self.settings.show_overlays;
             if overlays {
@@ -1181,9 +1239,29 @@ impl ViewerApp {
             ui.painter().image(texture, rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
         }
 
-        if let (Some((_, extend)), Some(hit)) = (pick, renderer.picked.take()) {
-            self.selection.click(hit, extend);
-            ui.ctx().request_repaint();
+        let hit = renderer.picked.take();
+        let point = renderer.picked_point.take().flatten();
+        match (pick.map(|p| p.1), hit) {
+            (Some(PickPurpose::Select { extend }), Some(hit)) => {
+                self.selection.click(hit, extend);
+                ui.ctx().request_repaint();
+            }
+            (Some(PickPurpose::MeasureClick), _) => {
+                if let Some(p) = point {
+                    match self.measure_start.take() {
+                        None => self.measure_start = Some(p),
+                        Some(a) => self.measures.push([a, p]),
+                    }
+                    self.measure_hover = None;
+                    self.measure_hover_px = None;
+                }
+                ui.ctx().request_repaint();
+            }
+            (Some(PickPurpose::MeasureHover), _) => {
+                self.measure_hover = point;
+                ui.ctx().request_repaint();
+            }
+            _ => {}
         }
     }
 
@@ -1199,6 +1277,9 @@ impl ViewerApp {
             return;
         }
         cap.frames += 1;
+        if let (4, Some([_, b])) = (cap.frames, cap.opts.measure) {
+            self.pending_pick = Some((b, PickPurpose::MeasureClick));
+        }
         if cap.frames == 2 {
             if let Some(view) = cap.opts.view {
                 self.camera.set_axis_view(view);
@@ -1225,8 +1306,12 @@ impl ViewerApp {
             if cap.opts.pie {
                 self.pie.open(ctx.content_rect().center(), ctx.input(|i| i.time));
             }
+            if let Some([a, _]) = cap.opts.measure {
+                self.tool = Tool::Measure;
+                self.pending_pick = Some((a, PickPurpose::MeasureClick));
+            }
             if let Some(p) = cap.opts.click {
-                self.pending_pick = Some((p, false));
+                self.pending_pick = Some((p, PickPurpose::Select { extend: false }));
             }
             if let Some(i) = cap.opts.select {
                 if i < self.selection.selected.len() {
