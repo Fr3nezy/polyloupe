@@ -132,6 +132,11 @@ pub struct Settings {
     pub show_origins: bool,
     /// Triangle budget shown against the model in Info (0 = none).
     pub triangle_budget: usize,
+    /// Turntable export options.
+    pub turntable_mp4: bool,
+    pub turntable_size: u32,
+    pub turntable_seconds: f32,
+    pub turntable_animate: bool,
     pub show_stats: bool,
     pub show_gizmo: bool,
 
@@ -188,6 +193,10 @@ impl Default for Settings {
             show_face_orientation: false,
             show_origins: false,
             triangle_budget: 0,
+            turntable_mp4: false,
+            turntable_size: 720,
+            turntable_seconds: 4.0,
+            turntable_animate: true,
             show_stats: true,
             show_gizmo: true,
             vsync: true,

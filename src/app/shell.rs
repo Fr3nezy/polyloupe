@@ -182,6 +182,10 @@ impl ViewerApp {
                         ui.close();
                         self.export_image(&ctx);
                     }
+                    if ui.button(tr("Export Turntable…")).clicked() {
+                        ui.close();
+                        self.show_turntable = true;
+                    }
                 });
                 ui.separator();
                 if ui.add(egui::Button::new(tr("Quit")).shortcut_text("Ctrl Q")).clicked() {

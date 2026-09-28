@@ -15,6 +15,7 @@ use eframe::egui_wgpu;
 
 mod compare;
 mod shell;
+mod turntable;
 mod uv_pane;
 
 use crate::anim::AnimPlayer;
@@ -238,6 +239,9 @@ pub struct ViewerApp {
     env_loading: Option<(Environment, Receiver<Result<EnvImage, String>>)>,
     capture: Option<CaptureState>,
     show_prefs: bool,
+    /// Turntable export window, and the encoding running in the background.
+    show_turntable: bool,
+    turntable_job: Option<Receiver<Result<PathBuf, String>>>,
     applied_language: Option<Language>,
     /// Receives files from later launches while "Open files in the same window" is on.
     instance: Option<instance::Server>,
@@ -316,6 +320,8 @@ impl ViewerApp {
             env_loading: None,
             capture: launch.capture.map(|opts| CaptureState { opts, frames: 0, requested: false }),
             show_prefs: false,
+            show_turntable: false,
+            turntable_job: None,
             applied_language: None,
             instance: None,
             viewport_px: [1280, 720],
@@ -429,15 +435,24 @@ impl ViewerApp {
 
     /// Saves the current view as a PNG, without UI and selection outlines.
     fn export_to(&mut self, path: &Path) -> Result<(), String> {
-        let section = self.section_plane();
-        let normal_length = self.normal_length();
-        let Some(renderer) = &mut self.renderer else { return Err(tr("Couldn't render the image").into()) };
         // 4x MSAA color + depth at 4096 px is already ~150 MB each; keep exports under that.
         const MAX_SIDE: f32 = 4096.0;
         let [w, h] = self.viewport_px;
         let scale = (self.settings.export_scale.clamp(1, 4) as f32).min(MAX_SIDE / w.max(h).max(1) as f32);
         let size = [(w as f32 * scale).round() as u32, (h as f32 * scale).round() as u32];
+        match self.render_offscreen(size, self.settings.export_transparent) {
+            Some(([w, h], pixels)) => image::save_buffer(path, &pixels, w, h, image::ColorType::Rgba8)
+                .map_err(|e| trf("Couldn't save the image: {error}", &[("error", &e)])),
+            None => Err(tr("Couldn't render the image").to_string()),
+        }
+    }
 
+    /// Renders the current view off screen, as an exported image looks: overlays per the
+    /// overlay switch, grid only if the export asks for it, no selection highlight.
+    fn render_offscreen(&mut self, size: [u32; 2], transparent: bool) -> Option<([u32; 2], Vec<u8>)> {
+        let section = self.section_plane();
+        let normal_length = self.normal_length();
+        let renderer = self.renderer.as_mut()?;
         let mut settings = self.settings.clone();
         settings.show_grid = settings.show_overlays && settings.export_grid;
         settings.show_wire_overlay &= settings.show_overlays;
@@ -447,7 +462,7 @@ impl ViewerApp {
         settings.show_overlapping &= settings.show_overlays;
         settings.show_normals &= settings.show_overlays;
         settings.show_face_orientation &= settings.show_overlays;
-        if settings.export_transparent {
+        if transparent {
             settings.env_background = false;
         }
         let (grid_cell, grid_fade, grid_axis) = grid_params(&self.camera);
@@ -464,16 +479,12 @@ impl ViewerApp {
             grid_axis,
             settings: &settings,
             pick: None,
-            transparent: settings.export_transparent,
+            transparent,
             section,
             normal_length,
         };
         renderer.render(None, size, &input);
-        match renderer.read_pixels() {
-            Some(([w, h], pixels)) => image::save_buffer(path, &pixels, w, h, image::ColorType::Rgba8)
-                .map_err(|e| trf("Couldn't save the image: {error}", &[("error", &e)])),
-            None => Err(tr("Couldn't render the image").to_string()),
-        }
+        renderer.read_pixels()
     }
 
     fn preferences(&mut self, ctx: &egui::Context) {
@@ -1420,6 +1431,13 @@ impl ViewerApp {
         if self.loading.is_some() || self.env_loading.is_some() {
             return;
         }
+        if cap.requested && cap.opts.turntable.is_some() {
+            if self.turntable_job.is_none() {
+                println!("turntable done");
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            return;
+        }
         // Hold the shot until the mesh analysis (and model B) are in.
         if cap.frames > 2 && (self.qa_rx.is_some() || self.compare_loading.is_some()) {
             return;
@@ -1497,6 +1515,11 @@ impl ViewerApp {
         let settle = if self.settings.show_fps { 400 } else { 40 };
         if cap.frames == settle && !cap.requested {
             cap.requested = true;
+            if let Some(out) = cap.opts.turntable.clone() {
+                self.settings.turntable_mp4 = out.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp4"));
+                self.export_turntable_to(out, ctx);
+                return;
+            }
             if let Some(out) = cap.opts.export.clone() {
                 match self.export_to(&out) {
                     Ok(()) => println!("exported {}", out.display()),
@@ -1542,6 +1565,7 @@ impl eframe::App for ViewerApp {
         self.poll_loading(&ctx);
         self.poll_qa();
         self.poll_compare(&ctx, frame);
+        self.poll_turntable(&ctx);
         self.update_environment(&ctx);
 
         let dropped: Vec<PathBuf> = ctx.input(|i| {
@@ -1617,6 +1641,7 @@ impl eframe::App for ViewerApp {
             None => {}
         }
         self.preferences(&ctx);
+        self.turntable_window(&ctx);
         self.welcome(&ctx);
         self.banner(&ctx);
         self.window_edges(&ctx);
