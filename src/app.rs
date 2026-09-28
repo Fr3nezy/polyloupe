@@ -25,6 +25,7 @@ use crate::navigation::{DragInput, Gesture, Navigation};
 use crate::loader::{self, EnvImage};
 use crate::render::{self, FrameInput, Renderer, environment};
 use crate::qa;
+use crate::snap;
 use crate::scene::{Aabb, MapRef, Scene};
 use crate::settings::{ColorMode, Environment, Settings, ShadingMode, TexturePass};
 use crate::ui::gizmo::{self, GizmoAction};
@@ -69,14 +70,17 @@ struct SceneInfo {
     qa: Option<qa::Report>,
 }
 
+/// Mesh analysis totals, marker instances and snapping data, per mesh.
+type QaResult = (qa::Report, Vec<Vec<render::MarkerInstance>>, Vec<snap::SnapMesh>);
+
 /// What a GPU pick is for.
 #[derive(Clone, Copy)]
 enum PickPurpose {
     Select { extend: bool },
-    /// Place a measurement point.
-    MeasureClick,
-    /// Rubber band to the cursor while the second point is pending.
-    MeasureHover,
+    /// Place a measurement point; `free` (Ctrl) skips vertex snapping.
+    MeasureClick { free: bool },
+    /// Snap indicator and rubber band under the cursor.
+    MeasureHover { free: bool },
 }
 
 /// Blender-style selection: a set plus one active object.
@@ -163,7 +167,9 @@ pub struct ViewerApp {
     info: Option<SceneInfo>,
     loading: Option<Loading>,
     /// Mesh analysis of the loaded scene: totals plus marker instances per mesh.
-    qa_rx: Option<Receiver<(qa::Report, Vec<Vec<render::MarkerInstance>>)>>,
+    qa_rx: Option<Receiver<QaResult>>,
+    /// Vertices per object for the Measure tool's snapping (arrives with the analysis).
+    snap: Vec<snap::SnapMesh>,
     selection: Selection,
     visible: Vec<bool>,
     /// Per-object texture channel shown instead of the global color mode.
@@ -186,7 +192,8 @@ pub struct ViewerApp {
     measures: Vec<[Vec3; 2]>,
     measure_start: Option<Vec3>,
     /// Surface point under the cursor while a measurement is being placed.
-    measure_hover: Option<Vec3>,
+    /// Point under the cursor and whether it snapped to a vertex.
+    measure_hover: Option<(Vec3, bool)>,
     measure_hover_px: Option<[u32; 2]>,
     env_loaded: Option<Environment>,
     env_loading: Option<(Environment, Receiver<Result<EnvImage, String>>)>,
@@ -240,6 +247,7 @@ impl ViewerApp {
             info: None,
             loading: None,
             qa_rx: None,
+            snap: Vec::new(),
             selection: Selection::default(),
             visible: Vec::new(),
             pass_override: Vec::new(),
@@ -592,6 +600,7 @@ impl ViewerApp {
         self.selection.reset(objects.len());
         self.measures.clear();
         self.cancel_measure();
+        self.snap.clear();
         self.visible = vec![true; objects.len()];
         self.pass_override = vec![None; objects.len()];
         let missing: Vec<String> = scene
@@ -638,10 +647,30 @@ impl ViewerApp {
             let (report, marks) = qa::analyze(&scene.meshes);
             log::info!("mesh analysis in {:?}: {report:?}", started.elapsed());
             let instances = scene.meshes.iter().zip(&marks).map(|(m, k)| render::marker_instances(m, k)).collect();
-            if tx.send((report, instances)).is_ok() {
+            let snap = scene.meshes.into_iter().map(|m| snap::SnapMesh::new(m.transform, m.positions)).collect();
+            if tx.send((report, instances, snap)).is_ok() {
                 ctx.request_repaint();
             }
         });
+    }
+
+    /// Moves a measurement point onto the nearest vertex of the object under the cursor,
+    /// when one is within the snap radius. Returns the point and whether it snapped.
+    fn snap_point(&self, object: Option<usize>, hit: Vec3, px: [u32; 2], free: bool, radius: f32) -> (Vec3, bool) {
+        let mesh = object.filter(|_| !free).and_then(|o| self.snap.get(o));
+        let Some(mesh) = mesh else { return (hit, false) };
+        let [w, h] = self.viewport_px;
+        let aspect = w as f32 / h.max(1) as f32;
+        let view_proj = self.camera.projection(aspect) * self.camera.view_matrix();
+        let cursor = glam::Vec2::new(px[0] as f32 + 0.5, px[1] as f32 + 0.5);
+        let size = glam::Vec2::new(w as f32, h.max(1) as f32);
+        match mesh.nearest(hit, cursor, view_proj, size, radius) {
+            Some(v) => {
+                log::debug!("measure point snapped: {hit} -> {v}");
+                (v, true)
+            }
+            None => (hit, false),
+        }
     }
 
     fn cancel_measure(&mut self) {
@@ -652,8 +681,9 @@ impl ViewerApp {
 
     fn poll_qa(&mut self) {
         let Some(rx) = &self.qa_rx else { return };
-        let Ok((report, instances)) = rx.try_recv() else { return };
+        let Ok((report, instances, snap)) = rx.try_recv() else { return };
         self.qa_rx = None;
+        self.snap = snap;
         if let Some(r) = &mut self.renderer {
             r.set_markers(&instances);
         }
@@ -1116,18 +1146,21 @@ impl ViewerApp {
         if response.clicked_by(PointerButton::Primary) && !mods.alt && self.info.is_some() {
             if let Some(pos) = response.interact_pointer_pos() {
                 let purpose = if self.tool == Tool::Measure {
-                    PickPurpose::MeasureClick
+                    PickPurpose::MeasureClick { free: mods.ctrl }
                 } else {
                     PickPurpose::Select { extend: mods.shift }
                 };
                 self.pending_pick = Some((to_px(pos), purpose));
             }
-        } else if self.tool == Tool::Measure && self.measure_start.is_some() && self.pending_pick.is_none() {
+        } else if self.tool == Tool::Measure && self.info.is_some() && self.pending_pick.is_none() {
             // Follow the cursor with a pick only when it moves: each pick waits for the GPU.
             let hover = response.hover_pos().map(to_px);
-            if hover.is_some() && hover != self.measure_hover_px {
+            if hover != self.measure_hover_px {
                 self.measure_hover_px = hover;
-                self.pending_pick = hover.map(|p| (p, PickPurpose::MeasureHover));
+                match hover {
+                    Some(p) => self.pending_pick = Some((p, PickPurpose::MeasureHover { free: mods.ctrl })),
+                    None => self.measure_hover = None,
+                }
             }
         }
         if self.tool == Tool::Measure && response.hovered() {
@@ -1241,13 +1274,15 @@ impl ViewerApp {
 
         let hit = renderer.picked.take();
         let point = renderer.picked_point.take().flatten();
+        let radius = snap::RADIUS_PX * ui.ctx().pixels_per_point();
         match (pick.map(|p| p.1), hit) {
             (Some(PickPurpose::Select { extend }), Some(hit)) => {
                 self.selection.click(hit, extend);
                 ui.ctx().request_repaint();
             }
-            (Some(PickPurpose::MeasureClick), _) => {
-                if let Some(p) = point {
+            (Some(PickPurpose::MeasureClick { free }), _) => {
+                let px = pick.map(|p| p.0).unwrap_or_default();
+                if let Some((p, _)) = point.map(|p| self.snap_point(hit.flatten(), p, px, free, radius)) {
                     match self.measure_start.take() {
                         None => self.measure_start = Some(p),
                         Some(a) => self.measures.push([a, p]),
@@ -1257,8 +1292,9 @@ impl ViewerApp {
                 }
                 ui.ctx().request_repaint();
             }
-            (Some(PickPurpose::MeasureHover), _) => {
-                self.measure_hover = point;
+            (Some(PickPurpose::MeasureHover { free }), _) => {
+                let px = pick.map(|p| p.0).unwrap_or_default();
+                self.measure_hover = point.map(|p| self.snap_point(hit.flatten(), p, px, free, radius));
                 ui.ctx().request_repaint();
             }
             _ => {}
@@ -1278,7 +1314,7 @@ impl ViewerApp {
         }
         cap.frames += 1;
         if let (4, Some([_, b])) = (cap.frames, cap.opts.measure) {
-            self.pending_pick = Some((b, PickPurpose::MeasureClick));
+            self.pending_pick = Some((b, PickPurpose::MeasureClick { free: false }));
         }
         if cap.frames == 2 {
             if let Some(view) = cap.opts.view {
@@ -1308,7 +1344,7 @@ impl ViewerApp {
             }
             if let Some([a, _]) = cap.opts.measure {
                 self.tool = Tool::Measure;
-                self.pending_pick = Some((a, PickPurpose::MeasureClick));
+                self.pending_pick = Some((a, PickPurpose::MeasureClick { free: false }));
             }
             if let Some(p) = cap.opts.click {
                 self.pending_pick = Some((p, PickPurpose::Select { extend: false }));

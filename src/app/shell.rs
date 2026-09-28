@@ -551,8 +551,9 @@ impl ViewerApp {
     /// Measurements: the distance line, its X/Y/Z legs along the axes and a label with the
     /// length and the per-axis deltas. Drawn on top of the model so they're never hidden.
     pub(super) fn draw_measures(&self, ui: &Ui, viewport: Rect) {
-        let preview = self.measure_start.zip(self.measure_hover);
-        if self.measures.is_empty() && self.measure_start.is_none() {
+        let preview = self.measure_start.zip(self.measure_hover.map(|h| h.0));
+        let snapped = self.measure_hover.filter(|h| h.1 && self.tool == Tool::Measure).map(|h| h.0);
+        if self.measures.is_empty() && self.measure_start.is_none() && snapped.is_none() {
             return;
         }
         let aspect = viewport.width() / viewport.height().max(1.0);
@@ -607,6 +608,12 @@ impl ViewerApp {
             if let Some(sa) = project(a) {
                 dot(sa);
             }
+        }
+        // Snapped vertex under the cursor: a square, like Blender's vertex snap target.
+        if let Some(at) = snapped.and_then(project) {
+            let square = Rect::from_center_size(at, Vec2::splat(12.0));
+            painter.rect_stroke(square, CornerRadius::ZERO, Stroke::new(4.0, shadow), egui::StrokeKind::Middle);
+            painter.rect_stroke(square, CornerRadius::ZERO, Stroke::new(2.0, theme::TEXT), egui::StrokeKind::Middle);
         }
     }
 
@@ -1068,6 +1075,7 @@ impl ViewerApp {
                 if !self.measures.is_empty() {
                     widgets::hint(ui, &["Del"], "Clear measurements");
                 }
+                widgets::hint(ui, &["Ctrl"], "No vertex snap");
                 widgets::hint(ui, &["Q"], "Back to select");
             } else if self.info.is_some() {
                 widgets::hint(ui, &["LMB"], "Select");
