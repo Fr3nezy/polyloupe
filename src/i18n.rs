@@ -258,6 +258,24 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Swap A and B" => "Scambia A e B",
         "Close the comparison" => "Chiudi il confronto",
         "Comparison" => "Confronto",
+        "Export Turntable" => "Esporta turntable",
+        "Export Turntable…" => "Esporta turntable…",
+        "Format" => "Formato",
+        "MP4 needs ffmpeg on the PATH (winget install ffmpeg). GIF works without it." => {
+            "L'MP4 richiede ffmpeg nel PATH (winget install ffmpeg). La GIF funziona senza."
+        }
+        "Long side in pixels; the shape follows the view" => "Lato lungo in pixel; le proporzioni seguono la vista",
+        "Play the animation during the turn" => "Riproduci l'animazione durante il giro",
+        "Turns once around the model from the current view, with the current shading." => {
+            "Un giro completo attorno al modello dalla vista attuale, con lo shading attuale."
+        }
+        "Export…" => "Esporta…",
+        "MP4 video" => "Video MP4",
+        "GIF animation" => "Animazione GIF",
+        "ffmpeg stopped while encoding" => "ffmpeg si è fermato durante la codifica",
+        "Encoding the turntable…" => "Codifica del turntable in corso…",
+        "Couldn't start ffmpeg: {error}" => "Impossibile avviare ffmpeg: {error}",
+        "ffmpeg couldn't encode the video" => "ffmpeg non è riuscito a codificare il video",
         "Triangle budget" => "Budget triangoli",
         "Drag or type your target; 0 turns it off" => "Trascina o scrivi il tuo obiettivo; 0 lo disattiva",
         "No texture: assuming 2048 px" => "Nessuna texture: ipotizzo 2048 px",
