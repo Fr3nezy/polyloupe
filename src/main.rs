@@ -6,25 +6,26 @@ mod axes;
 mod app;
 mod camera;
 mod cli;
-mod formats;
 mod i18n;
 mod icon;
 mod instance;
 mod navigation;
 mod qa;
-mod loader;
 mod render;
-mod scene;
 mod settings;
 mod snap;
 mod thumbnail;
 mod ui;
 mod uv;
 
+// Scene model and loaders live in polyloupe-core, shared with the thumbnail handler.
+use polyloupe_core::{loader, scene};
+
 use eframe::egui;
 
 fn main() -> eframe::Result {
     env_logger::init();
+    polyloupe_core::i18n::set_translator(|en| i18n::tr(en).to_string());
 
     // Headless thumbnail mode for the Explorer handler: no window, no saved state.
     let args: Vec<std::ffi::OsString> = std::env::args_os().collect();

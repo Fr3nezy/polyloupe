@@ -6,7 +6,7 @@ description = "Fast, native 3D model viewer with a Blender-style viewport"
 license = "MIT OR Apache-2.0"
 
 [workspace]
-members = [".", "thumbnailer"]
+members = [".", "core", "thumbnailer"]
 
 [dependencies]
 base64 = "0.23.1"
@@ -19,6 +19,7 @@ image = { version = "0.25", default-features = false, features = ["bmp", "exr", 
 log = "0.4.34"
 mikktspace = "0.3.0"
 pollster = "1"
+polyloupe-core = { path = "core" }
 roxmltree = "0.20"
 rfd = "0.17.2"
 serde = { version = "1.0.229", features = ["derive"] }

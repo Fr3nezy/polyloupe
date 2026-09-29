@@ -2621,6 +2621,7 @@ dependencies = [
  "log",
  "mikktspace",
  "pollster 1.0.1",
+ "polyloupe-core",
  "rfd",
  "roxmltree",
  "serde",
@@ -2628,6 +2629,22 @@ dependencies = [
  "sys-locale",
  "ufbx",
  "winresource",
+ "zip",
+]
+
+[[package]]
+name = "polyloupe-core"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "glam",
+ "gltf",
+ "image",
+ "log",
+ "mikktspace",
+ "roxmltree",
+ "stl_io",
+ "ufbx",
  "zip",
 ]
 

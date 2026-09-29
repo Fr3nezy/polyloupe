@@ -221,7 +221,7 @@ pub fn parse(bytes: &[u8], name: &str) -> Result<Scene, String> {
                     let c = |i: Option<usize>, default: f64| {
                         i.map_or(default, |i| values[i] / e.props[i].kind.color_scale()) as f32
                     };
-                    let srgb = [c(cr, 0.0), c(cg, 0.0), c(cb, 0.0)].map(crate::render::srgb_channel_to_linear);
+                    let srgb = [c(cr, 0.0), c(cg, 0.0), c(cb, 0.0)].map(crate::color::srgb_channel_to_linear);
                     colors.push([srgb[0], srgb[1], srgb[2], c(ca, 1.0)]);
                 }
             }

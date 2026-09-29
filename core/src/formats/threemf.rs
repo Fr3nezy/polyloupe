@@ -69,7 +69,7 @@ fn color(text: &str) -> Option<[f32; 4]> {
     let byte = |i: usize| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok();
     let (r, g, b) = (byte(0)?, byte(2)?, byte(4)?);
     let a = if hex.len() >= 8 { byte(6)? } else { 255 };
-    let lin = crate::render::srgb_to_linear([r, g, b]);
+    let lin = crate::color::srgb_to_linear([r, g, b]);
     Some([lin[0], lin[1], lin[2], a as f32 / 255.0])
 }
 
