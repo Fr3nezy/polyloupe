@@ -65,7 +65,7 @@ fn main() -> eframe::Result {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Poly Loupe")
+            .with_title("PolyLoupe")
             .with_decorations(false)
             .with_inner_size(size)
             .with_min_inner_size([640.0, 420.0])
@@ -78,19 +78,27 @@ fn main() -> eframe::Result {
     };
 
     eframe::run_native(
-        "Poly Loupe",
+        "PolyLoupe",
         options,
         Box::new(move |cc| Ok(Box::new(app::ViewerApp::new(cc, launch)))),
     )
 }
 
-/// Settings saved before the app was renamed live under the old app id: carry them over once.
+/// Settings saved before the app was renamed live under an old app id ("Poly Loupe", before that
+/// "3D Viewer"): carry the newest over once.
 fn migrate_settings() {
-    let (Some(new), Some(old)) = (eframe::storage_dir("Poly Loupe"), eframe::storage_dir("3D Viewer")) else {
+    let Some(new) = eframe::storage_dir("PolyLoupe") else { return };
+    let new_file = new.join("app.ron");
+    if new_file.exists() {
         return;
-    };
-    let (new_file, old_file) = (new.join("app.ron"), old.join("app.ron"));
-    if !new_file.exists() && old_file.exists() && std::fs::create_dir_all(&new).is_ok() {
-        let _ = std::fs::copy(&old_file, &new_file);
+    }
+    let old_file = ["Poly Loupe", "3D Viewer"]
+        .into_iter()
+        .filter_map(|id| eframe::storage_dir(id).map(|d| d.join("app.ron")))
+        .find(|f| f.exists());
+    if let Some(old_file) = old_file {
+        if std::fs::create_dir_all(&new).is_ok() {
+            let _ = std::fs::copy(&old_file, &new_file);
+        }
     }
 }

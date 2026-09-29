@@ -9,8 +9,8 @@
 # The DLL renders on its own (no GPU, no polyloupe.exe) inside Windows' thumbnail process, which
 # only hands it the file's bytes: .obj renders without its .mtl, .gltf with external files fails.
 #
-# Current user: %LOCALAPPDATA%\Programs\Poly Loupe, HKCU, no admin rights.
-# All users: %ProgramFiles%\Poly Loupe, HKLM, what the installer does. Prefer it: the thumbnail
+# Current user: %LOCALAPPDATA%\Programs\PolyLoupe, HKCU, no admin rights.
+# All users: %ProgramFiles%\PolyLoupe, HKLM, what the installer does. Prefer it: the thumbnail
 # process caches per-user COM classes and may not notice a per-user registration right away.
 
 param([switch]$AllUsers, [switch]$Uninstall)
@@ -26,10 +26,10 @@ if ($AllUsers) {
         $p = Start-Process powershell.exe -Verb RunAs -ArgumentList $argList -Wait -PassThru
         exit $p.ExitCode
     }
-    $dest = Join-Path $env:ProgramFiles 'Poly Loupe'
+    $dest = Join-Path $env:ProgramFiles 'PolyLoupe'
     $scope = @('/n', '/i:allusers')
 } else {
-    $dest = Join-Path $env:LOCALAPPDATA 'Programs\Poly Loupe'
+    $dest = Join-Path $env:LOCALAPPDATA 'Programs\PolyLoupe'
     $scope = @()
 }
 $dll = Join-Path $dest 'polyloupe_thumbs.dll'

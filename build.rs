@@ -17,8 +17,8 @@ fn main() {
     std::fs::write(&out, ico(&images)).unwrap();
     let mut res = winresource::WindowsResource::new();
     res.set_icon(out.to_str().unwrap());
-    res.set("FileDescription", "Poly Loupe");
-    res.set("ProductName", "Poly Loupe");
+    res.set("FileDescription", "PolyLoupe");
+    res.set("ProductName", "PolyLoupe");
     res.compile().unwrap();
 }
 

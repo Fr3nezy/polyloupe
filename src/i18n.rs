@@ -426,7 +426,7 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Switch to perspective (Numpad 5)" => "Passa in prospettiva (Numpad 5)",
         "Switch to orthographic (Numpad 5)" => "Passa in ortografica (Numpad 5)",
 
-        // Poly Loupe shell: title bar, tools, inspector, footer, empty state
+        // PolyLoupe shell: title bar, tools, inspector, footer, empty state
         "Inspector" => "Pannello",
         "Inspector (N)" => "Pannello (N)",
         "Select (Q)" => "Seleziona (Q)",
@@ -484,7 +484,7 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Shift while rotating" => "Shift mentre ruoti",
         "LMB  /  RMB drag" => "LMB  /  RMB trascina",
         "RMB drag" => "RMB trascina",
-        "Welcome to Poly Loupe" => "Benvenuto in Poly Loupe",
+        "Welcome to PolyLoupe" => "Benvenuto in PolyLoupe",
         "How do you move around in 3D? Pick the app your hands already know; you can change it later in Preferences." => {
             "Come ti muovi in 3D? Scegli l'app che le tue mani conoscono già; puoi cambiarla dopo nelle Preferenze."
         }
@@ -501,8 +501,8 @@ fn italian_text(en: &str) -> Option<&'static str> {
             "Aprire un file da Esplora file lo carica nella finestra già aperta invece di avviarne una nuova"
         }
         "Choose file types…" => "Scegli i tipi di file…",
-        "Opens Windows Default apps, where Poly Loupe can open .glb, .gltf, .fbx, .obj and .stl" => {
-            "Apre App predefinite di Windows, dove Poly Loupe può aprire .glb, .gltf, .fbx, .obj e .stl"
+        "Opens Windows Default apps, where PolyLoupe can open .glb, .gltf, .fbx, .obj and .stl" => {
+            "Apre App predefinite di Windows, dove PolyLoupe può aprire .glb, .gltf, .fbx, .obj e .stl"
         }
         "Viewport" => "Vista 3D",
         "Image Export" => "Esportazione immagine",

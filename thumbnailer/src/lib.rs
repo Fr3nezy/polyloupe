@@ -75,10 +75,10 @@ extern "system" fn DllMain(module: HINSTANCE, reason: u32, _reserved: *mut c_voi
     BOOL(1)
 }
 
-/// Appends to `%LOCALAPPDATA%\Poly Loupe\thumbs.log` when a `thumbs-debug` file exists next to
+/// Appends to `%LOCALAPPDATA%\PolyLoupe\thumbs.log` when a `thumbs-debug` file exists next to
 /// it, so a user can trace what Explorer asks for without a debug build.
 fn log(message: impl FnOnce() -> String) {
-    let Some(dir) = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Poly Loupe")) else { return };
+    let Some(dir) = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("PolyLoupe")) else { return };
     if !dir.join("thumbs-debug").exists() {
         return;
     }
@@ -355,7 +355,7 @@ fn register(root: HKEY) -> Result<()> {
     unregister(root);
     let dll = module_path().ok_or(windows_core::Error::from(E_FAIL))?;
     let key = format!("{CLASSES}\\CLSID\\{CLSID_STRING}");
-    set_value(root, &key, None, "Poly Loupe Thumbnail Provider")?;
+    set_value(root, &key, None, "PolyLoupe Thumbnail Provider")?;
     let server = format!("{key}\\InprocServer32");
     set_value(root, &server, None, &dll.to_string_lossy())?;
     set_value(root, &server, Some("ThreadingModel"), "Apartment")?;

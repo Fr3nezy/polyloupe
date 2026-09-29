@@ -1,5 +1,5 @@
 """Writes target/THIRD-PARTY-NOTICES.txt: the license texts of every crate and asset that ships
-inside Poly Loupe's binaries, as their licenses ask for in binary distributions.
+inside PolyLoupe's binaries, as their licenses ask for in binary distributions.
 
     python scripts/third-party-notices.py
 
@@ -68,7 +68,7 @@ def main():
             by_text.setdefault(text, []).append(label)
 
     out = [
-        "Poly Loupe is free software under the GNU General Public License, version 3 or later",
+        "PolyLoupe is free software under the GNU General Public License, version 3 or later",
         "(see LICENSE). It includes the third-party components below, under their own licenses.",
         "",
     ]

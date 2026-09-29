@@ -1,4 +1,4 @@
-; Inno Setup script for Poly Loupe (all users, admin).
+; Inno Setup script for PolyLoupe (all users, admin).
 ;
 ;   cargo build --release --workspace
 ;   iscc installer\polyloupe.iss
@@ -12,11 +12,11 @@
 
 [Setup]
 AppId={{24342D06-700F-425F-BDEF-C297766C9278}
-AppName=Poly Loupe
+AppName=PolyLoupe
 AppVersion={#AppVersion}
 AppPublisher=Manuel Franze
-DefaultDirName={autopf}\Poly Loupe
-DefaultGroupName=Poly Loupe
+DefaultDirName={autopf}\PolyLoupe
+DefaultGroupName=PolyLoupe
 DisableProgramGroupPage=yes
 PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
@@ -48,10 +48,10 @@ english.FileTypeName=3D model
 italian.FileTypeName=Modello 3D
 english.RegisterThumbs=Registering Explorer thumbnails...
 italian.RegisterThumbs=Registrazione delle miniature di Esplora file...
-english.ChooseDefault=Choose Poly Loupe as the default app for 3D files
-italian.ChooseDefault=Scegli Poly Loupe come app predefinita per i file 3D
-english.Launch=Launch Poly Loupe
-italian.Launch=Avvia Poly Loupe
+english.ChooseDefault=Choose PolyLoupe as the default app for 3D files
+italian.ChooseDefault=Scegli PolyLoupe come app predefinita per i file 3D
+english.Launch=Launch PolyLoupe
+italian.Launch=Avvia PolyLoupe
 
 [Files]
 Source: "..\target\release\polyloupe.exe"; DestDir: "{app}"; Flags: ignoreversion uninsrestartdelete
@@ -65,12 +65,12 @@ Source: "..\target\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignorevers
 Root: HKLM; Subkey: "Software\Classes\PolyLoupe.Model"; ValueType: string; ValueData: "{cm:FileTypeName}"; Flags: uninsdeletekey
 Root: HKLM; Subkey: "Software\Classes\PolyLoupe.Model\DefaultIcon"; ValueType: string; ValueData: "{app}\polyloupe.exe,0"
 Root: HKLM; Subkey: "Software\Classes\PolyLoupe.Model\shell\open\command"; ValueType: string; ValueData: """{app}\polyloupe.exe"" ""%1"""
-Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "Poly Loupe"; Flags: uninsdeletekey
+Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "PolyLoupe"; Flags: uninsdeletekey
 Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\shell\open\command"; ValueType: string; ValueData: """{app}\polyloupe.exe"" ""%1"""
-Root: HKLM; Subkey: "Software\Poly Loupe"; Flags: uninsdeletekey
-Root: HKLM; Subkey: "Software\Poly Loupe\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "Poly Loupe"
-Root: HKLM; Subkey: "Software\Poly Loupe\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "Fast 3D model viewer with a Blender-style viewport"
-Root: HKLM; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "Poly Loupe"; ValueData: "Software\Poly Loupe\Capabilities"; Flags: uninsdeletevalue
+Root: HKLM; Subkey: "Software\PolyLoupe"; Flags: uninsdeletekey
+Root: HKLM; Subkey: "Software\PolyLoupe\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "PolyLoupe"
+Root: HKLM; Subkey: "Software\PolyLoupe\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "Fast 3D model viewer with a Blender-style viewport"
+Root: HKLM; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "PolyLoupe"; ValueData: "Software\PolyLoupe\Capabilities"; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\.glb\OpenWithProgids"; ValueType: string; ValueName: "PolyLoupe.Model"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\.gltf\OpenWithProgids"; ValueType: string; ValueName: "PolyLoupe.Model"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\.fbx\OpenWithProgids"; ValueType: string; ValueName: "PolyLoupe.Model"; ValueData: ""; Flags: uninsdeletevalue
@@ -87,14 +87,18 @@ Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\SupportedTypes"
 Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\SupportedTypes"; ValueType: string; ValueName: ".ply"; ValueData: ""
 Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\SupportedTypes"; ValueType: string; ValueName: ".3mf"; ValueData: ""
 Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\SupportedTypes"; ValueType: string; ValueName: ".dae"; ValueData: ""
-Root: HKLM; Subkey: "Software\Poly Loupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".glb"; ValueData: "PolyLoupe.Model"
-Root: HKLM; Subkey: "Software\Poly Loupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".gltf"; ValueData: "PolyLoupe.Model"
-Root: HKLM; Subkey: "Software\Poly Loupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".fbx"; ValueData: "PolyLoupe.Model"
-Root: HKLM; Subkey: "Software\Poly Loupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".obj"; ValueData: "PolyLoupe.Model"
-Root: HKLM; Subkey: "Software\Poly Loupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".stl"; ValueData: "PolyLoupe.Model"
-Root: HKLM; Subkey: "Software\Poly Loupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".ply"; ValueData: "PolyLoupe.Model"
-Root: HKLM; Subkey: "Software\Poly Loupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".3mf"; ValueData: "PolyLoupe.Model"
-Root: HKLM; Subkey: "Software\Poly Loupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".dae"; ValueData: "PolyLoupe.Model"
+Root: HKLM; Subkey: "Software\PolyLoupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".glb"; ValueData: "PolyLoupe.Model"
+Root: HKLM; Subkey: "Software\PolyLoupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".gltf"; ValueData: "PolyLoupe.Model"
+Root: HKLM; Subkey: "Software\PolyLoupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".fbx"; ValueData: "PolyLoupe.Model"
+Root: HKLM; Subkey: "Software\PolyLoupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".obj"; ValueData: "PolyLoupe.Model"
+Root: HKLM; Subkey: "Software\PolyLoupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".stl"; ValueData: "PolyLoupe.Model"
+Root: HKLM; Subkey: "Software\PolyLoupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".ply"; ValueData: "PolyLoupe.Model"
+Root: HKLM; Subkey: "Software\PolyLoupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".3mf"; ValueData: "PolyLoupe.Model"
+Root: HKLM; Subkey: "Software\PolyLoupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".dae"; ValueData: "PolyLoupe.Model"
+
+; Leftovers of the builds named "Poly Loupe" (with a space).
+Root: HKLM; Subkey: "Software\Poly Loupe"; ValueType: none; Flags: deletekey
+Root: HKLM; Subkey: "Software\RegisteredApplications"; ValueType: none; ValueName: "Poly Loupe"; Flags: deletevalue
 
 ; Leftovers of the pre-rename "3D Viewer" builds.
 Root: HKLM; Subkey: "Software\Classes\3DViewer.Model"; ValueType: none; Flags: deletekey
@@ -108,16 +112,18 @@ Root: HKLM; Subkey: "Software\Classes\.obj\OpenWithProgids"; ValueType: none; Va
 Root: HKLM; Subkey: "Software\Classes\.stl\OpenWithProgids"; ValueType: none; ValueName: "3DViewer.Model"; Flags: deletevalue
 
 [InstallDelete]
+Type: filesandordirs; Name: "{autopf}\Poly Loupe"
+Type: files; Name: "{autoprograms}\Poly Loupe.lnk"
 Type: filesandordirs; Name: "{autopf}\3D Viewer"
 Type: files; Name: "{autoprograms}\3D Viewer.lnk"
 
 [Icons]
-Name: "{autoprograms}\Poly Loupe"; Filename: "{app}\polyloupe.exe"
+Name: "{autoprograms}\PolyLoupe"; Filename: "{app}\polyloupe.exe"
 
 [Run]
 Filename: "{sys}\regsvr32.exe"; Parameters: "/s /n /i:allusers ""{app}\polyloupe_thumbs.dll"""; \
     Flags: runhidden waituntilterminated; StatusMsg: "{cm:RegisterThumbs}"
-Filename: "ms-settings:defaultapps?registeredAppMachine=Poly%20Loupe"; Description: "{cm:ChooseDefault}"; \
+Filename: "ms-settings:defaultapps?registeredAppMachine=PolyLoupe"; Description: "{cm:ChooseDefault}"; \
     Flags: shellexec postinstall skipifsilent unchecked
 Filename: "{app}\polyloupe.exe"; Description: "{cm:Launch}"; Flags: nowait postinstall skipifsilent
 

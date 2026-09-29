@@ -1,4 +1,4 @@
-//! Window chrome in the Poly Loupe style: custom title bar with menus, tool rail, viewport
+//! Window chrome in the PolyLoupe style: custom title bar with menus, tool rail, viewport
 //! toolbar and HUD, the inspector (Info / Materials / Scene), footer, empty state and banners.
 //! Tokens and controls come from `ui::theme` and `ui::widgets`.
 

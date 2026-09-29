@@ -1,4 +1,4 @@
-//! Scene model and file format loaders, shared by the Poly Loupe app and its Explorer thumbnail
+//! Scene model and file format loaders, shared by the PolyLoupe app and its Explorer thumbnail
 //! handler (which renders without a GPU, inside Windows' thumbnail process).
 
 pub mod color;

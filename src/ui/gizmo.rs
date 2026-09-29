@@ -1,6 +1,6 @@
 //! Navigation gizmo (top-right of the viewport), same behavior as Blender's:
 //! click an axis to look along it, click it again to flip, drag to orbit.
-//! Sits on a dark disc with a hairline border, like the rest of the Poly Loupe chrome.
+//! Sits on a dark disc with a hairline border, like the rest of the PolyLoupe chrome.
 
 use crate::i18n::{tr, trf};
 use eframe::egui::{

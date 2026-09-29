@@ -1,4 +1,4 @@
-//! Poly Loupe design tokens: black chrome, one white accent, hairline borders, 4px corners.
+//! PolyLoupe design tokens: black chrome, one white accent, hairline borders, 4px corners.
 //! Space Grotesk for text, a monospace for technical labels (uppercase, tracked out).
 
 use eframe::egui::{

@@ -39,7 +39,7 @@ use crate::ui::timeline::{self, TimelineAction, TimelineView};
 use crate::ui::widgets::{self};
 use crate::ui::{icons, theme};
 
-const APP_NAME: &str = "Poly Loupe";
+const APP_NAME: &str = "PolyLoupe";
 /// Picks which decade of grid lines is visible for a given camera distance.
 const GRID_LEVEL_OFFSET: f32 = 1.05;
 
@@ -557,11 +557,11 @@ impl ViewerApp {
                 // Windows only lets the user pick default apps; open that page on our entry.
                 if ui
                     .button(tr("Choose file types…"))
-                    .on_hover_text(tr("Opens Windows Default apps, where Poly Loupe can open .glb, .gltf, .fbx, .obj and .stl"))
+                    .on_hover_text(tr("Opens Windows Default apps, where PolyLoupe can open .glb, .gltf, .fbx, .obj and .stl"))
                     .clicked()
                 {
                     let _ = std::process::Command::new("explorer.exe")
-                        .arg("ms-settings:defaultapps?registeredAppMachine=Poly%20Loupe")
+                        .arg("ms-settings:defaultapps?registeredAppMachine=PolyLoupe")
                         .spawn();
                 }
                 ui.add_space(6.0);
@@ -592,7 +592,7 @@ impl ViewerApp {
         }
         egui::Modal::new(egui::Id::new("welcome")).show(ctx, |ui| {
             ui.set_width(380.0);
-            ui.label(RichText::new(tr("Welcome to Poly Loupe")).size(17.0).color(theme::TEXT));
+            ui.label(RichText::new(tr("Welcome to PolyLoupe")).size(17.0).color(theme::TEXT));
             ui.add_space(4.0);
             ui.label(
                 RichText::new(tr("How do you move around in 3D? Pick the app your hands already know; you can change it later in Preferences."))

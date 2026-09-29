@@ -1,7 +1,7 @@
 //! "Open files in the same window".
 //!
 //! While the preference is on, the running window listens on a loopback port and records it, with
-//! a random token, in `%LOCALAPPDATA%\Poly Loupe\instance`. A later launch with a file (a double
+//! a random token, in `%LOCALAPPDATA%\PolyLoupe\instance`. A later launch with a file (a double
 //! click in Explorer) sends the path there and exits; if nothing answers it opens normally.
 
 use std::io::{BufRead, BufReader, Write};
@@ -15,7 +15,7 @@ use std::time::Duration;
 use eframe::egui;
 
 fn record_path() -> Option<PathBuf> {
-    Some(PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Poly Loupe").join("instance"))
+    Some(PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("PolyLoupe").join("instance"))
 }
 
 /// Hands `file` to a running window. True when it accepted it.

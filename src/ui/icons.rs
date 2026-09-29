@@ -181,7 +181,7 @@ pub fn repeat(p: &Painter, rect: Rect, color: Color32) {
     triangle(p, end + dir * 1.5, 5.0, 1.0, color);
 }
 
-// --- Poly Loupe line icons, ported from the UI prototype (SVG viewBoxes of 12..18 units) ----
+// --- PolyLoupe line icons, ported from the UI prototype (SVG viewBoxes of 12..18 units) ----
 
 /// Maps a point of an `n` x `n` icon box onto `rect` (square, centered).
 fn grid(rect: Rect, n: f32) -> impl Fn(f32, f32) -> Pos2 {

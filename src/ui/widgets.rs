@@ -1,4 +1,4 @@
-//! Poly Loupe controls. Buttons are quiet (transparent, #1c1c1c on hover) and invert to white
+//! PolyLoupe controls. Buttons are quiet (transparent, #1c1c1c on hover) and invert to white
 //! on black when selected; groups sit on a #111 toolbar with a hairline border.
 
 use eframe::egui::{
