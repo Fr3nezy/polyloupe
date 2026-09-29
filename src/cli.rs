@@ -38,6 +38,8 @@ pub struct CaptureOptions {
     pub compare_split: bool,
     /// Open the UV pane.
     pub uv: bool,
+    /// Show this material's texture set in the UV pane.
+    pub uv_material: Option<usize>,
     /// Export a turntable (GIF, or MP4 by extension) instead of a screenshot.
     pub turntable: Option<PathBuf>,
     /// Channel to show on the selection (`--select`) only.
@@ -183,6 +185,10 @@ pub fn parse() -> Result<LaunchOptions, String> {
             "--compare" => capture.compare = Some(PathBuf::from(value("--compare")?)),
             "--compare-split" => capture.compare_split = true,
             "--uv" => capture.uv = true,
+            "--uv-material" => {
+                capture.uv = true;
+                capture.uv_material = value("--uv-material")?.parse().ok();
+            }
             "--turntable" => capture.turntable = Some(PathBuf::from(value("--turntable")?)),
             "--section" => {
                 // x|y|z[,position 0..1][,flip]

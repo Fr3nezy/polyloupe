@@ -1524,6 +1524,7 @@ impl ViewerApp {
     fn drive_capture(&mut self, ctx: &egui::Context) {
         let mut pending_channel = None;
         let mut pending_compare = None;
+        let mut pending_uv_material = None;
         let Some(cap) = &mut self.capture else { return };
         ctx.request_repaint();
         if self.loading.is_some() || self.env_loading.is_some() {
@@ -1578,6 +1579,7 @@ impl ViewerApp {
             if cap.opts.uv {
                 self.uv_view.open = true;
             }
+            pending_uv_material = cap.opts.uv_material;
             if let Some(path) = cap.opts.compare.clone() {
                 pending_compare = Some(path);
             }
@@ -1645,6 +1647,9 @@ impl ViewerApp {
         }
         if let Some(pass) = pending_channel {
             self.apply_channel(ChannelAction::Show(pass));
+        }
+        if let Some(m) = pending_uv_material {
+            self.uv_show_material(m);
         }
         if let Some(path) = pending_compare {
             self.open_compare(path, ctx);
