@@ -63,42 +63,37 @@ Requires Rust (stable) and, on Windows, the MSVC build tools.
 cargo run --release -- path/to/model.glb
 ```
 
-## Explorer thumbnails
-
-```bash
-cargo build --release --workspace
-```
-
-Installer (all users, admin), built with [Inno Setup](https://jrsoftware.org/isinfo.php):
+## Installer and Explorer thumbnails
 
 ```bash
 powershell -ExecutionPolicy Bypass -File scripts/build-installer.ps1
 ```
 
-It writes `target\installer\3DViewer-Setup-<version>.exe` (English or Italian wizard), which
-installs to `Program Files`, registers the thumbnail handler machine-wide, adds 3D Viewer to
-"Open with" and Default apps for .glb .gltf .fbx .obj .stl .ply .3mf .dae, and offers to open Default apps at
-the end (Windows doesn't let installers pick the default app themselves). Without an installer:
+Builds everything and writes `target\installer\PolyLoupe-Setup-<version>.exe` (English or Italian
+wizard, built with [Inno Setup](https://jrsoftware.org/isinfo.php)). It installs to
+`Program Files`, registers the thumbnail handler, adds Poly Loupe to "Open with" and Default apps
+for .glb .gltf .fbx .obj .stl .ply .3mf .dae, and offers to open Default apps at the end (Windows
+doesn't let installers pick the default app themselves).
+
+The thumbnail handler works like Blender's handler for .blend files: Windows runs it in its
+isolated thumbnail process and hands it the file's bytes, and the DLL parses the model and renders
+it on the CPU (no GPU, no helper process), in about 30 ms for a typical model. Files next to the
+model are out of its reach there: an .obj renders without its .mtl, and a .gltf with external
+buffers keeps the normal icon. `polyloupe --thumbnail model.glb out.png 256` renders exactly what
+Explorer shows.
+
+Without the installer:
 
 ```bash
 powershell -ExecutionPolicy Bypass -File scripts/install-thumbnails.ps1 -AllUsers
 ```
 
-Drop `-AllUsers` to install for the current user only (`%LOCALAPPDATA%\Programs\3D Viewer`, no
-admin); add `-Uninstall` to remove either.
+Drop `-AllUsers` to install for the current user only (`%LOCALAPPDATA%\Programs\Poly Loupe`, no
+admin), though Windows may take a while to notice a per-user handler; add `-Uninstall` to remove
+either.
 
-The two differ for formats that reference other files. The all-users install loads the handler
-in Explorer with the file's real path (rendering itself runs in a separate process), so .obj
-picks up its .mtl and .gltf its buffers and textures. Per user, Windows forces an isolated
-process that only receives the file's bytes: .obj renders without materials and a .gltf with
-external files keeps the normal icon. .glb, .fbx and .stl render fully either way.
-
-Thumbnails come from a small background renderer (`viewer3d --thumbnail-server`) that keeps the
-GPU ready while you browse and quits after a minute of inactivity: after the first file, each
-thumbnail takes a few milliseconds (tens for big models) instead of about a second.
-
-Explorer's thumbnail cache keeps old icons for files it has already seen: clear "Thumbnails" in
-Disk Cleanup to refresh them.
+Explorer keeps the thumbnails it already made: clear "Thumbnails" in Disk Cleanup to see files you
+browsed before an update with the new renderer.
 
 ## Screenshots from the command line
 
@@ -115,6 +110,6 @@ Flags: `--shading wireframe|solid|rendered`, `--lighting studio|matcap|flat`,
 `--export OUT.png [--export-scale 1|2|4] [--transparent]` runs File > Export Image instead of a
 window screenshot.
 
-Headless thumbnail: `viewer3d --thumbnail model.glb out.png 256`. Capture runs never change your saved preferences.
+Capture runs never change your saved preferences.
 
 See [PLAN.md](PLAN.md) for the roadmap.
