@@ -8,7 +8,7 @@ license = "GPL-3.0-or-later"
 [dependencies]
 base64 = "0.23.1"
 glam = "0.33.10"
-gltf = "1.4.1"
+gltf = { version = "1.4.1", features = ["KHR_texture_transform"] }
 image = { version = "0.25", default-features = false, features = ["bmp", "exr", "gif", "hdr", "jpeg", "png", "tga"] }
 log = "0.4.34"
 mikktspace = "0.3.0"

@@ -96,6 +96,21 @@ struct ImageJob {
 }
 
 /// Texture files by name and candidate paths (looked up in `dirs` too), decoded in parallel.
+/// KHR_texture_transform (tiling, offset, rotation of a texture's UVs), baked into the mesh UVs.
+/// The spec allows one per texture; materials almost always use the same for all of them, so
+/// the base color's wins, then metallic-roughness, then emissive.
+fn uv_transform(material: &gltf::Material<'_>) -> Option<impl Fn([f32; 2]) -> [f32; 2]> {
+    let pbr = material.pbr_metallic_roughness();
+    let t = pbr
+        .base_color_texture()
+        .and_then(|i| i.texture_transform())
+        .or_else(|| pbr.metallic_roughness_texture().and_then(|i| i.texture_transform()))
+        .or_else(|| material.emissive_texture().and_then(|i| i.texture_transform()))?;
+    let ([ox, oy], [sx, sy], (s, c)) = (t.offset(), t.scale(), t.rotation().sin_cos());
+    // uv' = translation * rotation * scale * uv, as the extension defines it.
+    Some(move |[u, v]: [f32; 2]| [c * sx * u + s * sy * v + ox, -s * sx * u + c * sy * v + oy])
+}
+
 pub(crate) fn load_texture_files(files: Vec<(String, Vec<PathBuf>)>, dirs: &[PathBuf], warnings: &mut Vec<String>) -> Vec<Image> {
     let jobs = files
         .into_iter()
@@ -415,7 +430,13 @@ fn load_gltf(path: &Path, texture_dirs: &[PathBuf]) -> Result<Scene, String> {
                 name: if prim_count > 1 { format!("{base_name}.{pi:03}") } else { base_name.clone() },
                 positions,
                 normals: reader.read_normals().map(|n| n.collect()),
-                uvs: reader.read_tex_coords(0).map(|t| t.into_f32().collect()),
+                uvs: reader.read_tex_coords(0).map(|t| {
+                    let uvs = t.into_f32();
+                    match uv_transform(&prim.material()) {
+                        Some(transform) => uvs.map(|uv| transform(uv)).collect(),
+                        None => uvs.collect(),
+                    }
+                }),
                 tangents: reader.read_tangents().map(|t| t.collect()),
                 colors: reader.read_colors(0).map(|c| c.into_rgba_f32().collect()),
                 indices,
