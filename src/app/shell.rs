@@ -303,6 +303,18 @@ impl ViewerApp {
             ("Shift Alt Z", "Toggle overlays"),
             ("F12", "Export image"),
         ]);
+        let open = |url: String| {
+            let _ = std::process::Command::new("explorer.exe").arg(url).spawn();
+        };
+        if ui.button(tr("Report a bug or suggest a feature…")).clicked() {
+            open(format!("{REPO_URL}/issues/new/choose"));
+            ui.close();
+        }
+        if ui.button(tr("Check for updates…")).clicked() {
+            open(format!("{REPO_URL}/releases/latest"));
+            ui.close();
+        }
+        ui.separator();
         ui.label(theme::caps(&format!("{APP_NAME} v{}", env!("CARGO_PKG_VERSION")), 11.0, theme::TEXT_DIM));
     }
 

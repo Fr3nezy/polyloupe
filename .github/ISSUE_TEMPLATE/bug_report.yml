@@ -1,0 +1,38 @@
+name: Bug report
+description: Something doesn't open, looks wrong or crashes.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. If a model opens wrong, a screenshot helps a lot, and the file
+        itself (or a link to it) helps even more, when you're allowed to share it.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+  - type: input
+    id: format
+    attributes:
+      label: File format
+      placeholder: e.g. FBX exported from Blender 4.2, GLB from Substance Painter
+  - type: input
+    id: version
+    attributes:
+      label: PolyLoupe version
+      description: Shown at the bottom of the Help menu.
+      placeholder: e.g. 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Windows version and GPU
+      placeholder: e.g. Windows 11 24H2, RTX 4070 laptop
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshots, files or anything else
