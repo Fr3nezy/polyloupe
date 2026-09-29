@@ -33,7 +33,7 @@ say "Windows protected your PC": choose **More info > Run anyway**.
   - Measure (M) with vertex snapping, per-axis deltas.
   - Cross-section along X, Y or Z with a hatched cap.
   - A/B compare of two models (side by side or split, synced camera and animation).
-  - UV layout pane (U) with the texture behind, mirrored and out-of-0–1 islands counted.
+  - UV layout pane (U) with the texture behind, mirrored and out-of-0–1 islands counted; show the selected objects or a whole texture set (every object using one material).
   - Normals and face orientation overlays, origins, scale and declared units, pivot.
   - Texel density and a triangle budget bar.
 - Animation: skinning, morph targets and node animation (glTF, FBX) with a Blender-style timeline.
