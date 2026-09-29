@@ -293,6 +293,7 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Origins" => "Origini",
         "Each object's pivot as a dot, like Blender" => "Il pivot di ogni oggetto come un punto, come in Blender",
         "Pivot" => "Pivot",
+        "Show pivots in the viewport, with the active object's axes" => "Mostra i pivot nella vista, con gli assi dell'oggetto attivo",
         "Unknown" => "Sconosciuto",
         "Outside the model" => "Fuori dal modello",
         "Bottom center" => "Base, centrato",

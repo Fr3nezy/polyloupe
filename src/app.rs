@@ -12,7 +12,7 @@ use eframe::egui::{
     PointerButton, Pos2, Rect, RectAlign, RichText, Sense, Stroke, StrokeKind, TextureHandle,
     TextureOptions, Ui, UiBuilder, pos2, vec2,
 };
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 use eframe::egui_wgpu;
 
 mod compare;
@@ -52,8 +52,9 @@ struct ObjectMeta {
     /// World-space bounds.
     bounds: Aabb,
     material: usize,
-    /// Pivot (object origin) in world space, rest pose.
+    /// Pivot (object origin) in world space, rest pose, and its local X, Y and Z directions.
     origin: Vec3,
+    axes: [Vec3; 3],
 }
 
 struct MaterialMeta {
@@ -1813,6 +1814,12 @@ fn scene_info(scene: &Scene, path: &Path, load_time: Duration) -> SceneInfo {
                 bounds: m.bounds.transformed(&m.transform),
                 material: m.material.min(scene.materials.len() - 1),
                 origin: m.transform.w_axis.truncate(),
+                axes: {
+                    // Undo the file's up-axis conversion so an unrotated object shows X, Y, Z
+                    // like the navigation gizmo (and Blender), not its Y-up file axes.
+                    let t = m.transform * Mat4::from_quat(scene.axis_conversion.inverse());
+                    [t.x_axis, t.y_axis, t.z_axis].map(|a| a.truncate().normalize_or_zero())
+                },
             })
             .collect(),
         vertices: scene.source_vertex_count,

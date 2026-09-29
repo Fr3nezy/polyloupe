@@ -232,20 +232,40 @@ pub struct TableRows<'a> {
 
 impl TableRows<'_> {
     pub fn row(&mut self, key: &str, value: &str) {
+        self.row_inner(key, value, None);
+    }
+
+    /// A row that toggles something on click, with an eye showing whether it's on.
+    pub fn row_toggle(&mut self, key: &str, value: &str, on: bool) -> Response {
+        self.row_inner(key, value, Some(on))
+    }
+
+    fn row_inner(&mut self, key: &str, value: &str, toggle: Option<bool>) -> Response {
         let ui = &mut *self.ui;
         let width = ui.available_width();
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 38.0), Sense::hover());
+        let sense = if toggle.is_some() { Sense::click() } else { Sense::hover() };
+        let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 38.0), sense);
         if !self.first {
             ui.painter().hline(rect.x_range(), rect.top(), Stroke::new(1.0, theme::BORDER));
         }
         self.first = false;
         let p = ui.painter();
+        let mut right = rect.right() - 12.0;
+        if let Some(on) = toggle {
+            if response.hovered() {
+                p.rect_filled(rect.shrink(1.0), 0.0, theme::WIDGET_HOVER);
+            }
+            let icon = Rect::from_center_size(egui::pos2(right - 9.0, rect.center().y), Vec2::splat(18.0));
+            crate::ui::icons::eye(p, icon, if on { theme::TEXT } else { theme::TEXT_DIM }, on);
+            right -= 26.0;
+        }
         let value = p.layout_no_wrap(value.to_string(), theme::medium(14.0), theme::TEXT);
-        let value_left = rect.right() - 12.0 - value.size().x;
+        let value_left = right - value.size().x;
         p.galley(egui::pos2(value_left, rect.center().y - value.size().y * 0.5), value, theme::TEXT);
         // Long keys (file names) are clipped before the value.
         let clip = Rect::from_min_max(rect.min, egui::pos2(value_left - 10.0, rect.bottom()));
         p.with_clip_rect(clip).text(rect.left_center() + Vec2::new(12.0, 0.0), egui::Align2::LEFT_CENTER, tr(key), egui::FontId::proportional(14.0), theme::TEXT_DIM);
+        response
     }
 }
 
