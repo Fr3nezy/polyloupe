@@ -104,6 +104,7 @@ pub fn parse(text: &str, base: PathBuf) -> Result<(Scene, Vec<(String, Vec<PathB
     }
     let mut scene = Scene::new(p.meshes, p.materials, Vec::new(), p.source_vertices);
     scene.units = Units::Declared(meter);
+    scene.axis_conversion = glam::Quat::from_mat4(&axes);
     Ok((scene, p.texture_files))
 }
 

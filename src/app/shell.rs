@@ -645,7 +645,8 @@ impl ViewerApp {
         }
     }
 
-    /// Object origins as dots (selected ones in the selection colors), like Blender.
+    /// Object origins as dots (selected ones in the selection colors), like Blender, plus the
+    /// active object's local axes so the pivot's orientation shows too.
     pub(super) fn draw_origins(&self, ui: &Ui, viewport: Rect) {
         let Some(info) = &self.info else { return };
         if !(self.settings.show_origins && self.settings.show_overlays) {
@@ -654,16 +655,30 @@ impl ViewerApp {
         let aspect = viewport.width() / viewport.height().max(1.0);
         let view_proj = self.camera.projection(aspect) * self.camera.view_matrix();
         let painter = ui.painter().with_clip_rect(viewport);
+        let project = |p: Vec3| {
+            let c = view_proj * p.extend(1.0);
+            (c.w > 1e-6).then(|| {
+                let n = c.truncate() / c.w;
+                pos2(viewport.left() + (n.x * 0.5 + 0.5) * viewport.width(), viewport.top() + (0.5 - n.y * 0.5) * viewport.height())
+            })
+        };
+        if let Some(o) = self.selection.active.and_then(|i| info.objects.get(i)).filter(|_| self.selection.active.is_some_and(|i| self.visible.get(i).copied().unwrap_or(true))) {
+            // A fixed share of the camera distance keeps the axes about the same size on screen.
+            let length = (self.camera.eye() - o.origin).length() * 0.08;
+            if let Some(at) = project(o.origin) {
+                for (axis, color) in o.axes.iter().zip([theme::AXIS_X, theme::AXIS_Y, theme::AXIS_Z]) {
+                    if let Some(tip) = project(o.origin + *axis * length) {
+                        painter.line_segment([at, tip], Stroke::new(4.0, Color32::from_black_alpha(160)));
+                        painter.line_segment([at, tip], Stroke::new(2.0, color));
+                    }
+                }
+            }
+        }
         for (i, o) in info.objects.iter().enumerate() {
             if !self.visible.get(i).copied().unwrap_or(true) {
                 continue;
             }
-            let c = view_proj * o.origin.extend(1.0);
-            if c.w <= 1e-6 {
-                continue;
-            }
-            let n = c.truncate() / c.w;
-            let at = pos2(viewport.left() + (n.x * 0.5 + 0.5) * viewport.width(), viewport.top() + (0.5 - n.y * 0.5) * viewport.height());
+            let Some(at) = project(o.origin) else { continue };
             let fill = if self.selection.active == Some(i) {
                 Color32::from_rgb(0xff, 0xab, 0x40)
             } else if self.selection.selected.get(i).copied().unwrap_or(false) {
@@ -1015,13 +1030,18 @@ impl ViewerApp {
             widgets::section(ui, "Object");
             let material = &info.materials[o.material].name;
             let pivot = tr(pivot_place(o.origin, &o.bounds)).to_string();
-            table(ui, |t| {
+            let shown = self.settings.show_origins && self.settings.show_overlays;
+            let toggle = table(ui, |t| {
                 t.row("Name", &o.name);
                 t.row("Triangles", &thousands(o.triangles));
                 t.row("Vertices", &thousands(o.vertices));
                 t.row("Material", material);
-                t.row("Pivot", &pivot);
+                t.row_toggle("Pivot", &pivot, shown)
             });
+            if toggle.on_hover_text(tr("Show pivots in the viewport, with the active object's axes")).clicked() {
+                self.settings.show_origins = !shown;
+                self.settings.show_overlays |= !shown;
+            }
             ui.add_space(12.0);
         }
 

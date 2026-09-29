@@ -310,6 +310,9 @@ pub struct Scene {
     pub animation: Animation,
     /// Units the file declares (the scene itself is always in meters).
     pub units: Units,
+    /// Rotation the loader applied to bring the file's up axis to Z (identity for Z-up files).
+    /// Undoing it on an object's transform gives its axes as Blender's importers show them.
+    pub axis_conversion: Quat,
 }
 
 /// What a file says about its units.
@@ -437,6 +440,7 @@ impl Scene {
             warnings: Vec::new(),
             animation: Animation::default(),
             units: Units::Undeclared,
+            axis_conversion: Quat::IDENTITY,
         }
     }
 
