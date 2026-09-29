@@ -1,0 +1,18 @@
+[package]
+name = "polyloupe-core"
+version = "0.1.0"
+edition = "2024"
+description = "Scene model and file format loaders shared by Poly Loupe and its Explorer thumbnail handler"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+base64 = "0.23.1"
+glam = "0.33.10"
+gltf = "1.4.1"
+image = { version = "0.25", default-features = false, features = ["bmp", "exr", "gif", "hdr", "jpeg", "png", "tga"] }
+log = "0.4.34"
+mikktspace = "0.3.0"
+roxmltree = "0.20"
+stl_io = "0.11.0"
+ufbx = "0.11.5"
+zip = { version = "2", default-features = false, features = ["deflate"] }

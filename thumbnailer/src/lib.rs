@@ -1,30 +1,29 @@
 //! Explorer thumbnail handler (IThumbnailProvider) for 3D model files.
 //!
-//! The DLL stays small and dependency-light: rendering happens in `polyloupe.exe` (installed next
-//! to it), normally the warm `--thumbnail-server`, and the DLL only hands Explorer the bitmap.
-//! Explorer caches the result, so each file renders once.
+//! Self-contained, like Blender's `.blend` handler: the DLL parses the model and renders it on
+//! the CPU (`polyloupe_core::thumbnail`), with no GPU, helper process, socket or server. That lets
+//! Windows run it isolated in its thumbnail process (`dllhost`), which only hands the handler a
+//! stream of the file's bytes: the same path for every drive and every caller.
 //!
 //! Registration:
 //! - all users (HKLM, admin, what the installer does): `regsvr32 /n /i:allusers`, and
-//!   `regsvr32 /u /n /i:allusers` to remove. Every format uses the in-process CLSID: Explorer
-//!   passes the real path (no copy of the file, and .gltf/.obj find the files next to them), and
-//!   the isolated surrogate failed to load the DLL from Program Files (0x8007007E). Only IPC
-//!   runs inside Explorer; the renderer is a separate process.
+//!   `regsvr32 /u /n /i:allusers` to remove.
 //! - per user (HKCU, no admin rights): `regsvr32 polyloupe_thumbs.dll`, `regsvr32 /u` to remove.
-//!   Windows ignores DisableProcessIsolation there, so Explorer runs the handler isolated and
-//!   only hands it the file's bytes.
+//!
+//! Windows can keep resolving thumbnail handlers through registrations that are gone from the
+//! registry: on a development machine, Explorer and the thumbnail process kept asking for an older
+//! per-user CLSID and DLL path across reboots. So this handler has a CLSID of its own, registration
+//! clears the CLSIDs earlier builds used, and the DLL still answers to those in case Windows
+//! remembers one.
 
 #![allow(non_snake_case)]
 // MSVC reports creating the import library for the COM exports; that is expected.
 #![allow(linker_messages)]
 
 use std::ffi::c_void;
-use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
-use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
     CLASS_E_CLASSNOTAVAILABLE, CLASS_E_NOAGGREGATION, E_FAIL, E_UNEXPECTED, HINSTANCE, HMODULE,
@@ -38,8 +37,9 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
 use windows::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_WRITE, REG_DWORD, REG_OPTION_NON_VOLATILE,
-    REG_SZ, REG_VALUE_TYPE, RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegSetValueExW,
+    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ,
+    REG_VALUE_TYPE, RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteKeyW, RegDeleteTreeW,
+    RegGetValueW, RegSetValueExW,
 };
 use windows::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
 use windows::Win32::UI::Shell::PropertiesSystem::{
@@ -53,16 +53,16 @@ use windows::Win32::UI::Shell::{
 };
 use windows_core::{BOOL, GUID, HRESULT, IUnknown, Interface, PCWSTR, Ref, Result, implement};
 
-/// Isolated handler: Explorer runs it in a surrogate process and only gives it a stream.
-const CLSID_THUMBNAILER: GUID = GUID::from_u128(0x1fcd9853_22d9_46b7_a5c0_cba9444584c9);
-const CLSID_STRING: &str = "{1fcd9853-22d9-46b7-a5c0-cba9444584c9}";
-/// The same handler registered with DisableProcessIsolation (all-users install only).
-const CLSID_THUMBNAILER_INPROC: GUID = GUID::from_u128(0x1db9db9f_86bc_47bb_88ed_99c5551e49f1);
-const CLSID_INPROC_STRING: &str = "{1db9db9f-86bc-47bb-88ed-99c5551e49f1}";
+const CLSID_THUMBNAILER: GUID = GUID::from_u128(0x0e196db0_b2ec_4fbc_b2e4_5fd1b0bf39df);
+const CLSID_STRING: &str = "{0e196db0-b2ec-4fbc-b2e4-5fd1b0bf39df}";
+/// CLSIDs of earlier builds (isolated, and in-process with DisableProcessIsolation).
+const LEGACY_CLSIDS: [(GUID, &str); 2] = [
+    (GUID::from_u128(0x1fcd9853_22d9_46b7_a5c0_cba9444584c9), "{1fcd9853-22d9-46b7-a5c0-cba9444584c9}"),
+    (GUID::from_u128(0x1db9db9f_86bc_47bb_88ed_99c5551e49f1), "{1db9db9f-86bc-47bb-88ed-99c5551e49f1}"),
+];
 /// The shell's IThumbnailProvider handler category.
 const THUMBNAIL_HANDLER_KEY: &str = "{e357fccd-a995-4576-b01f-234630154e96}";
 const EXTENSIONS: &[&str] = &[".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply", ".3mf", ".dae"];
-const RENDER_TIMEOUT: Duration = Duration::from_secs(30);
 
 static MODULE: AtomicIsize = AtomicIsize::new(0);
 static SEQUENCE: AtomicU32 = AtomicU32::new(0);
@@ -75,15 +75,10 @@ extern "system" fn DllMain(module: HINSTANCE, reason: u32, _reserved: *mut c_voi
     BOOL(1)
 }
 
-/// `%LOCALAPPDATA%\Poly Loupe`: the thumbnail server record, and the debug log.
-fn app_dir() -> Option<PathBuf> {
-    Some(PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Poly Loupe"))
-}
-
-/// Appends to `thumbs.log` when a `thumbs-debug` file exists next to it, so a user can trace
-/// what Explorer asks for without a debug build.
+/// Appends to `%LOCALAPPDATA%\Poly Loupe\thumbs.log` when a `thumbs-debug` file exists next to
+/// it, so a user can trace what Explorer asks for without a debug build.
 fn log(message: impl FnOnce() -> String) {
-    let Some(dir) = app_dir() else { return };
+    let Some(dir) = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Poly Loupe")) else { return };
     if !dir.join("thumbs-debug").exists() {
         return;
     }
@@ -105,10 +100,7 @@ fn module_path() -> Option<PathBuf> {
 // --- COM objects -------------------------------------------------------------------------------
 
 #[implement(IClassFactory)]
-struct Factory {
-    /// Builds the path-only provider (the DisableProcessIsolation CLSID).
-    path_only: bool,
-}
+struct Factory;
 
 impl IClassFactory_Impl for Factory_Impl {
     fn CreateInstance(
@@ -120,11 +112,7 @@ impl IClassFactory_Impl for Factory_Impl {
         if outer.is_some() {
             return Err(CLASS_E_NOAGGREGATION.into());
         }
-        let provider: IUnknown = if self.path_only {
-            PathThumbnailProvider::default().into()
-        } else {
-            ThumbnailProvider::default().into()
-        };
+        let provider: IUnknown = ThumbnailProvider::default().into();
         unsafe { provider.query(riid, object).ok() }
     }
 
@@ -139,10 +127,8 @@ enum Source {
     Stream(IStream),
 }
 
-type SourceSlot = Mutex<Option<Source>>;
-
-/// Isolated provider. Explorer's surrogate only ever uses the stream; the path initializers are
-/// kept for other hosts.
+/// Explorer's thumbnail process only ever uses the stream; the path initializers serve other
+/// hosts (and the probe example).
 #[implement(
     IThumbnailProvider,
     IInitializeWithStream,
@@ -151,277 +137,117 @@ type SourceSlot = Mutex<Option<Source>>;
 )]
 #[derive(Default)]
 struct ThumbnailProvider {
-    source: SourceSlot,
+    source: Mutex<Option<Source>>,
 }
 
-/// In-process provider for formats with files next to them. It deliberately has no
-/// IInitializeWithStream: the shell prefers a stream whenever a handler offers one, and a stream
-/// does not say which folder the model is in.
-#[implement(IThumbnailProvider, IInitializeWithItem, IInitializeWithFile)]
-#[derive(Default)]
-struct PathThumbnailProvider {
-    source: SourceSlot,
-}
-
-fn store(slot: &SourceSlot, source: Source) -> Result<()> {
-    *slot.lock().map_err(|_| windows_core::Error::from(E_FAIL))? = Some(source);
-    Ok(())
-}
-
-fn path_from_file(path: &PCWSTR) -> Result<Source> {
-    let path = unsafe { path.to_string() }.map_err(|_| windows_core::Error::from(E_FAIL))?;
-    Ok(Source::Path(PathBuf::from(path)))
-}
-
-fn path_from_item(item: Ref<IShellItem>) -> Result<Source> {
-    let item = item.ok()?;
-    let name = unsafe { item.GetDisplayName(SIGDN_FILESYSPATH)? };
-    let path = unsafe { name.to_string() };
-    unsafe { CoTaskMemFree(Some(name.0 as *const c_void)) };
-    let path = path.map_err(|_| windows_core::Error::from(E_FAIL))?;
-    Ok(Source::Path(PathBuf::from(path)))
-}
-
-fn thumbnail(
-    slot: &SourceSlot,
-    cx: u32,
-    bitmap: *mut HBITMAP,
-    alpha: *mut WTS_ALPHATYPE,
-) -> Result<()> {
-    let guard = slot.lock().map_err(|_| windows_core::Error::from(E_FAIL))?;
-    let rendered = match guard
-        .as_ref()
-        .ok_or(windows_core::Error::from(E_UNEXPECTED))?
-    {
-        Source::Path(path) => render(path, cx),
-        Source::Stream(stream) => render_stream(stream, cx),
-    };
-    log(|| format!("thumbnail {cx}px: {}", if rendered.is_some() { "ok" } else { "FAILED" }));
-    let (w, h, rgba) = rendered.ok_or(windows_core::Error::from(E_FAIL))?;
-    let hbitmap = to_hbitmap(w, h, &rgba)?;
-    unsafe {
-        *bitmap = hbitmap;
-        *alpha = WTSAT_ARGB;
+impl ThumbnailProvider_Impl {
+    fn store(&self, source: Source) -> Result<()> {
+        *self.source.lock().map_err(|_| windows_core::Error::from(E_FAIL))? = Some(source);
+        Ok(())
     }
-    Ok(())
 }
 
 impl IInitializeWithStream_Impl for ThumbnailProvider_Impl {
     fn Initialize(&self, stream: Ref<IStream>, _mode: u32) -> Result<()> {
-        log(|| "init stream".into());
-        store(&self.source, Source::Stream(stream.ok()?.clone()))
+        self.store(Source::Stream(stream.ok()?.clone()))
     }
 }
 
 impl IInitializeWithFile_Impl for ThumbnailProvider_Impl {
     fn Initialize(&self, path: &PCWSTR, _mode: u32) -> Result<()> {
-        let source = path_from_file(path)?;
-        log(|| format!("init file {}", describe(&source)));
-        store(&self.source, source)
+        let path = unsafe { path.to_string() }.map_err(|_| windows_core::Error::from(E_FAIL))?;
+        self.store(Source::Path(PathBuf::from(path)))
     }
 }
 
 impl IInitializeWithItem_Impl for ThumbnailProvider_Impl {
     fn Initialize(&self, item: Ref<IShellItem>, _mode: u32) -> Result<()> {
-        let source = path_from_item(item)?;
-        log(|| format!("init item {}", describe(&source)));
-        store(&self.source, source)
-    }
-}
-
-fn describe(source: &Source) -> String {
-    match source {
-        Source::Path(p) => p.display().to_string(),
-        Source::Stream(_) => "stream".into(),
+        let name = unsafe { item.ok()?.GetDisplayName(SIGDN_FILESYSPATH)? };
+        let path = unsafe { name.to_string() };
+        unsafe { CoTaskMemFree(Some(name.0 as *const c_void)) };
+        let path = path.map_err(|_| windows_core::Error::from(E_FAIL))?;
+        self.store(Source::Path(PathBuf::from(path)))
     }
 }
 
 impl IThumbnailProvider_Impl for ThumbnailProvider_Impl {
     fn GetThumbnail(&self, cx: u32, bitmap: *mut HBITMAP, alpha: *mut WTS_ALPHATYPE) -> Result<()> {
-        thumbnail(&self.source, cx, bitmap, alpha)
+        let started = std::time::Instant::now();
+        let guard = self.source.lock().map_err(|_| windows_core::Error::from(E_FAIL))?;
+        let size = cx.clamp(16, 1024);
+        let (name, rendered) = match guard.as_ref().ok_or(windows_core::Error::from(E_UNEXPECTED))? {
+            Source::Path(path) => (path.display().to_string(), render_file(path, size)),
+            Source::Stream(stream) => render_stream(stream, size),
+        };
+        log(|| match &rendered {
+            Ok(_) => format!("{size}px ok in {} ms: {name}", started.elapsed().as_millis()),
+            Err(e) => format!("{size}px FAILED in {} ms: {name}: {e}", started.elapsed().as_millis()),
+        });
+        let rgba = rendered.map_err(|_| windows_core::Error::from(E_FAIL))?;
+        let hbitmap = to_hbitmap(size, size, &rgba)?;
+        unsafe {
+            *bitmap = hbitmap;
+            *alpha = WTSAT_ARGB;
+        }
+        Ok(())
     }
 }
 
-impl IInitializeWithFile_Impl for PathThumbnailProvider_Impl {
-    fn Initialize(&self, path: &PCWSTR, _mode: u32) -> Result<()> {
-        let source = path_from_file(path)?;
-        log(|| format!("path-only init file {}", describe(&source)));
-        store(&self.source, source)
-    }
+/// Loads and renders a model. Parsers and the renderer run under `catch_unwind`: a malformed file
+/// must fail the thumbnail, not take the host process down.
+fn render_file(path: &Path, size: u32) -> std::result::Result<Vec<u8>, String> {
+    std::panic::catch_unwind(|| {
+        let scene = polyloupe_core::loader::load(path)?;
+        polyloupe_core::thumbnail::render(&scene, size).ok_or_else(|| "nothing to draw".to_string())
+    })
+    .unwrap_or_else(|_| Err("the loader panicked".into()))
 }
 
-impl IInitializeWithItem_Impl for PathThumbnailProvider_Impl {
-    fn Initialize(&self, item: Ref<IShellItem>, _mode: u32) -> Result<()> {
-        let source = path_from_item(item)?;
-        log(|| format!("path-only init item {}", describe(&source)));
-        store(&self.source, source)
-    }
-}
-
-impl IThumbnailProvider_Impl for PathThumbnailProvider_Impl {
-    fn GetThumbnail(&self, cx: u32, bitmap: *mut HBITMAP, alpha: *mut WTS_ALPHATYPE) -> Result<()> {
-        thumbnail(&self.source, cx, bitmap, alpha)
-    }
-}
-
-/// Renders from a stream. Explorer's isolated surrogate only reports the bare file name, so the
-/// bytes are copied to a temporary file with the same extension. Files next to the model are not
-/// reachable from there: .obj renders without its .mtl, and a .gltf with external buffers fails
-/// (Explorer then keeps the normal icon). The all-users install avoids this for those formats.
-fn render_stream(stream: &IStream, size: u32) -> Option<(u32, u32, Vec<u8>)> {
+/// Renders from the stream Explorer's thumbnail process hands over. It only names the file (no
+/// folder), so the bytes go to a temporary copy with the same name for the loaders. Files next to
+/// the model are out of reach from there: an .obj renders without its .mtl, and a .gltf with
+/// external buffers keeps the normal icon.
+fn render_stream(stream: &IStream, size: u32) -> (String, std::result::Result<Vec<u8>, String>) {
     let mut stat = STATSTG::default();
-    unsafe { stream.Stat(&mut stat, STATFLAG_DEFAULT) }.ok()?;
-    let name = (!stat.pwcsName.is_null())
-        .then(|| unsafe { stat.pwcsName.to_string() }.ok())
-        .flatten();
-    unsafe { CoTaskMemFree(Some(stat.pwcsName.0 as *const c_void)) };
-    let name = PathBuf::from(name?);
-    log(|| format!("stream name {:?} absolute={}", name, name.is_absolute()));
-    if name.is_absolute() && name.is_file() {
-        return render(&name, size);
+    if let Err(e) = unsafe { stream.Stat(&mut stat, STATFLAG_DEFAULT) } {
+        return ("stream".into(), Err(e.to_string()));
     }
+    let name = (!stat.pwcsName.is_null()).then(|| unsafe { stat.pwcsName.to_string() }.ok()).flatten();
+    unsafe { CoTaskMemFree(Some(stat.pwcsName.0 as *const c_void)) };
+    let Some(name) = name else { return ("stream".into(), Err("the stream has no name".into())) };
+    let path = PathBuf::from(&name);
+    if path.is_absolute() && path.is_file() {
+        return (name, render_file(&path, size));
+    }
+    let Some(file_name) = path.file_name().map(|n| n.to_owned()) else {
+        return (name, Err("the stream has no file name".into()));
+    };
 
-    let ext = name.extension()?.to_string_lossy().to_lowercase();
     let mut bytes = Vec::with_capacity(stat.cbSize as usize);
-    let mut chunk = vec![0u8; 1 << 16];
+    let mut chunk = vec![0u8; 1 << 20];
     loop {
         let mut read = 0u32;
-        let hr = unsafe {
-            stream.Read(
-                chunk.as_mut_ptr() as *mut c_void,
-                chunk.len() as u32,
-                Some(&mut read),
-            )
-        };
+        let hr = unsafe { stream.Read(chunk.as_mut_ptr() as *mut c_void, chunk.len() as u32, Some(&mut read)) };
         if hr.is_err() {
-            return None;
+            return (name, Err(format!("reading the stream failed: {hr:?}")));
         }
         if read == 0 {
             break;
         }
         bytes.extend_from_slice(&chunk[..read as usize]);
     }
-    let copy = std::env::temp_dir().join(format!(
-        "polyloupe-thumb-src-{}-{}.{ext}",
+    let dir = std::env::temp_dir().join(format!(
+        "polyloupe-thumb-{}-{}",
         std::process::id(),
         SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));
-    std::fs::write(&copy, &bytes).ok()?;
-    let result = render(&copy, size);
-    let _ = std::fs::remove_file(&copy);
-    result
-}
-
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
-
-/// Renders through the warm thumbnail server (`polyloupe --thumbnail-server`), starting it when
-/// none is running; falls back to a one-shot `polyloupe --thumbnail` run.
-fn render(path: &std::path::Path, size: u32) -> Option<(u32, u32, Vec<u8>)> {
-    let exe = module_path()?.parent()?.join("polyloupe.exe");
-    match ask_server(path, size) {
-        Server::Answered(result) => return result,
-        Server::Unreachable => log(|| "server unreachable, starting one".into()),
-    }
-    // Break away from the surrogate's job so the server outlives this dllhost; not every job
-    // allows it, hence the retry.
-    let spawn = |flags| {
-        use std::process::Stdio;
-        // No inherited handles: the server must not keep the caller's pipes open.
-        Command::new(&exe)
-            .arg("--thumbnail-server")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags(flags)
-            .spawn()
-    };
-    if spawn(CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB).or_else(|_| spawn(CREATE_NO_WINDOW)).is_ok() {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(25));
-            if let Server::Answered(result) = ask_server(path, size) {
-                return result;
-            }
-        }
-    }
-    log(|| "server didn't answer, rendering once".into());
-    render_once(&exe, path, size)
-}
-
-enum Server {
-    /// The server replied: an image, or `None` when the file couldn't be rendered.
-    Answered(Option<(u32, u32, Vec<u8>)>),
-    Unreachable,
-}
-
-fn ask_server(path: &std::path::Path, size: u32) -> Server {
-    use std::io::{BufRead, BufReader, Read, Write};
-    use std::net::{Ipv4Addr, SocketAddr, TcpStream};
-    let record = app_dir().and_then(|d| std::fs::read_to_string(d.join("thumbnail-server")).ok());
-    let Some((port, token)) = record.as_deref().and_then(|r| r.trim().split_once(' ')) else {
-        return Server::Unreachable;
-    };
-    let Ok(port) = port.parse::<u16>() else { return Server::Unreachable };
-    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(200)) else {
-        return Server::Unreachable;
-    };
-    let _ = stream.set_read_timeout(Some(RENDER_TIMEOUT));
-    if writeln!(stream, "{token}\n{}\n{}", size.clamp(16, 1024), path.display()).is_err() {
-        return Server::Unreachable;
-    }
-    let mut reader = BufReader::new(stream);
-    let mut header = String::new();
-    if reader.read_line(&mut header).is_err() || header.is_empty() {
-        return Server::Unreachable;
-    }
-    let mut parts = header.split_whitespace();
-    if parts.next() != Some("ok") {
-        return Server::Answered(None);
-    }
-    let (Some(Ok(w)), Some(Ok(h))) = (parts.next().map(str::parse::<u32>), parts.next().map(str::parse::<u32>)) else {
-        return Server::Answered(None);
-    };
-    let mut rgba = vec![0u8; (w * h * 4) as usize];
-    Server::Answered(reader.read_exact(&mut rgba).ok().map(|_| (w, h, rgba)))
-}
-
-/// Runs `polyloupe.exe --thumbnail` into a raw `.rgba` file (no image decoder in this DLL: it
-/// must stay dependency-light to load inside Explorer's restricted thumbnail surrogate).
-fn render_once(exe: &std::path::Path, path: &std::path::Path, size: u32) -> Option<(u32, u32, Vec<u8>)> {
-    let out = std::env::temp_dir().join(format!(
-        "polyloupe-thumb-{}-{}.rgba",
-        std::process::id(),
-        SEQUENCE.fetch_add(1, Ordering::Relaxed)
-    ));
-    let mut child = Command::new(exe)
-        .arg("--thumbnail")
-        .arg(path)
-        .arg(&out)
-        .arg(size.clamp(16, 1024).to_string())
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .ok()?;
-    let start = Instant::now();
-    let ok = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status.success(),
-            Ok(None) if start.elapsed() > RENDER_TIMEOUT => {
-                let _ = child.kill();
-                break false;
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(15)),
-            Err(_) => break false,
-        }
-    };
-    let data = ok.then(|| std::fs::read(&out).ok()).flatten();
-    let _ = std::fs::remove_file(&out);
-    let data = data?;
-    let w = u32::from_le_bytes(data.get(0..4)?.try_into().ok()?);
-    let h = u32::from_le_bytes(data.get(4..8)?.try_into().ok()?);
-    let pixels = data.get(8..8 + (w * h * 4) as usize)?.to_vec();
-    Some((w, h, pixels))
+    let copy = dir.join(file_name);
+    let result = std::fs::create_dir_all(&dir)
+        .and_then(|_| std::fs::write(&copy, &bytes))
+        .map_err(|e| format!("couldn't write {}: {e}", copy.display()))
+        .and_then(|_| render_file(&copy, size));
+    let _ = std::fs::remove_dir_all(&dir);
+    (name, result)
 }
 
 /// Top-down 32-bit DIB with premultiplied BGRA, as Explorer expects for WTSAT_ARGB.
@@ -463,32 +289,26 @@ extern "system" fn DllGetClassObject(
     riid: *const GUID,
     object: *mut *mut c_void,
 ) -> HRESULT {
-    log(|| format!("DllGetClassObject {:?}", unsafe { clsid.as_ref() }));
-    if clsid.is_null()
-        || object.is_null()
-        || !matches!(
-            unsafe { *clsid },
-            CLSID_THUMBNAILER | CLSID_THUMBNAILER_INPROC
-        )
-    {
+    if clsid.is_null() || object.is_null() {
         return CLASS_E_CLASSNOTAVAILABLE;
     }
-    let factory: IClassFactory = Factory {
-        path_only: unsafe { *clsid } == CLSID_THUMBNAILER_INPROC,
+    let clsid = unsafe { *clsid };
+    if clsid != CLSID_THUMBNAILER && !LEGACY_CLSIDS.iter().any(|(g, _)| *g == clsid) {
+        return CLASS_E_CLASSNOTAVAILABLE;
     }
-    .into();
+    let factory: IClassFactory = Factory.into();
     unsafe { factory.query(riid, object) }
 }
 
 #[unsafe(no_mangle)]
 extern "system" fn DllCanUnloadNow() -> HRESULT {
-    // Kept loaded for the (short) life of the thumbnail surrogate process.
+    // Kept loaded for the (short) life of the thumbnail process.
     S_FALSE
 }
 
 #[unsafe(no_mangle)]
 extern "system" fn DllRegisterServer() -> HRESULT {
-    finish(register(HKEY_CURRENT_USER, false))
+    finish(register(HKEY_CURRENT_USER))
 }
 
 #[unsafe(no_mangle)]
@@ -505,14 +325,14 @@ extern "system" fn DllInstall(install: BOOL, cmdline: PCWSTR) -> HRESULT {
     } else {
         unsafe { cmdline.to_string() }.unwrap_or_default()
     };
-    let root = if cmdline.trim().eq_ignore_ascii_case("allusers") {
-        HKEY_LOCAL_MACHINE
-    } else {
-        HKEY_CURRENT_USER
-    };
-    let machine = root == HKEY_LOCAL_MACHINE;
+    let all_users = cmdline.trim().eq_ignore_ascii_case("allusers");
+    let root = if all_users { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER };
+    if all_users {
+        // Per-user leftovers (a development registration) would shadow the machine-wide one.
+        unregister(HKEY_CURRENT_USER);
+    }
     if install.as_bool() {
-        finish(register(root, machine))
+        finish(register(root))
     } else {
         unregister(root);
         finish(Ok(()))
@@ -531,61 +351,71 @@ fn finish(result: Result<()>) -> HRESULT {
 
 const CLASSES: &str = "Software\\Classes";
 
-/// `in_process` routes every format to the non-isolated CLSID (Windows ignores
-/// DisableProcessIsolation under HKCU, so it only means something machine-wide).
-fn register(root: HKEY, in_process: bool) -> Result<()> {
+fn register(root: HKEY) -> Result<()> {
+    unregister(root);
     let dll = module_path().ok_or(windows_core::Error::from(E_FAIL))?;
-    let dll = dll.to_string_lossy();
-    register_clsid(root, CLSID_STRING, &dll, false)?;
-    if in_process {
-        register_clsid(root, CLSID_INPROC_STRING, &dll, true)?;
-    }
+    let key = format!("{CLASSES}\\CLSID\\{CLSID_STRING}");
+    set_value(root, &key, None, "Poly Loupe Thumbnail Provider")?;
+    let server = format!("{key}\\InprocServer32");
+    set_value(root, &server, None, &dll.to_string_lossy())?;
+    set_value(root, &server, Some("ThreadingModel"), "Apartment")?;
     for ext in EXTENSIONS {
-        let clsid = if in_process { CLSID_INPROC_STRING } else { CLSID_STRING };
-        set_value(
-            root,
-            &format!("{CLASSES}\\{ext}\\ShellEx\\{THUMBNAIL_HANDLER_KEY}"),
-            None,
-            clsid,
-        )?;
+        set_value(root, &handler_key(ext), None, CLSID_STRING)?;
     }
     Ok(())
 }
 
-fn register_clsid(root: HKEY, clsid: &str, dll: &str, in_process: bool) -> Result<()> {
-    let key = format!("{CLASSES}\\CLSID\\{clsid}");
-    set_value(root, &key, None, "Poly Loupe Thumbnail Provider")?;
-    if in_process {
-        set_dword(root, &key, "DisableProcessIsolation", 1)?;
-    }
-    let server = format!("{key}\\InprocServer32");
-    set_value(root, &server, None, dll)?;
-    set_value(root, &server, Some("ThreadingModel"), "Apartment")
-}
-
+/// Removes this handler and the ones older builds registered. An extension's thumbnail handler
+/// entry is only removed when it points at one of ours; a `ShellEx` key left empty goes too, since
+/// an empty per-user one can hide the machine-wide handler from Explorer.
 fn unregister(root: HKEY) {
-    for clsid in [CLSID_STRING, CLSID_INPROC_STRING] {
+    let ours: Vec<&str> = LEGACY_CLSIDS.iter().map(|(_, s)| *s).chain([CLSID_STRING]).collect();
+    for ext in EXTENSIONS {
+        let key = handler_key(ext);
+        if get_value(root, &key).is_some_and(|v| ours.iter().any(|c| c.eq_ignore_ascii_case(&v))) {
+            let _ = delete_tree(root, &key);
+        }
+        // RegDeleteKeyW refuses keys that still have subkeys: only an empty ShellEx is removed.
+        let shellex = wide(&format!("{CLASSES}\\{ext}\\ShellEx"));
+        let _ = unsafe { RegDeleteKeyW(root, PCWSTR(shellex.as_ptr())) };
+    }
+    for clsid in ours {
         let _ = delete_tree(root, &format!("{CLASSES}\\CLSID\\{clsid}"));
     }
-    for ext in EXTENSIONS {
-        let _ = delete_tree(
-            root,
-            &format!("{CLASSES}\\{ext}\\ShellEx\\{THUMBNAIL_HANDLER_KEY}"),
-        );
-    }
+}
+
+fn handler_key(ext: &str) -> String {
+    format!("{CLASSES}\\{ext}\\ShellEx\\{THUMBNAIL_HANDLER_KEY}")
 }
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+fn get_value(root: HKEY, key: &str) -> Option<String> {
+    let key_w = wide(key);
+    let mut buf = vec![0u16; 256];
+    let mut len = (buf.len() * 2) as u32;
+    unsafe {
+        RegGetValueW(
+            root,
+            PCWSTR(key_w.as_ptr()),
+            PCWSTR::null(),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buf.as_mut_ptr() as *mut c_void),
+            Some(&mut len),
+        )
+        .ok()
+        .ok()?;
+    }
+    let chars = (len as usize / 2).saturating_sub(1);
+    Some(String::from_utf16_lossy(&buf[..chars.min(buf.len())]))
+}
+
 fn set_value(root: HKEY, key: &str, name: Option<&str>, value: &str) -> Result<()> {
     let data: Vec<u8> = wide(value).iter().flat_map(|c| c.to_le_bytes()).collect();
     write_value(root, key, name, REG_SZ, &data)
-}
-
-fn set_dword(root: HKEY, key: &str, name: &str, value: u32) -> Result<()> {
-    write_value(root, key, Some(name), REG_DWORD, &value.to_le_bytes())
 }
 
 fn write_value(

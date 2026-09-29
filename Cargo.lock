@@ -2621,6 +2621,7 @@ dependencies = [
  "log",
  "mikktspace",
  "pollster 1.0.1",
+ "polyloupe-core",
  "rfd",
  "roxmltree",
  "serde",
@@ -2632,10 +2633,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "polyloupe-core"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "glam",
+ "gltf",
+ "image",
+ "log",
+ "mikktspace",
+ "roxmltree",
+ "stl_io",
+ "ufbx",
+ "zip",
+]
+
+[[package]]
 name = "polyloupe-thumbs"
 version = "0.1.0"
 dependencies = [
  "image",
+ "polyloupe-core",
  "windows",
  "windows-core",
 ]

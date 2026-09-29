@@ -30,7 +30,7 @@ fn main() -> windows_core::Result<()> {
         let lib = LoadLibraryW(PCWSTR(dll_w.as_ptr()))?;
         let proc = GetProcAddress(lib, s!("DllGetClassObject")).expect("DllGetClassObject export");
         let get: GetClassObject = std::mem::transmute(proc);
-        let clsid = GUID::from_u128(0x1fcd9853_22d9_46b7_a5c0_cba9444584c9);
+        let clsid = GUID::from_u128(0x0e196db0_b2ec_4fbc_b2e4_5fd1b0bf39df);
         let mut factory: *mut c_void = std::ptr::null_mut();
         get(&clsid, &IClassFactory::IID, &mut factory).ok()?;
         let factory = IClassFactory::from_raw(factory);

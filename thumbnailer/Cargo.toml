@@ -10,6 +10,7 @@ name = "polyloupe_thumbs"
 crate-type = ["cdylib"]
 
 [dependencies]
+polyloupe-core = { path = "../core" }
 windows-core = "0.62"
 windows = { version = "0.62", features = [
     "Win32_Foundation",
@@ -25,5 +26,5 @@ windows = { version = "0.62", features = [
 ] }
 
 [dev-dependencies]
-# Only the probe example saves PNGs; the DLL itself stays free of image decoders.
+# The probe example saves the thumbnail as a PNG.
 image = { version = "0.25", default-features = false, features = ["png"] }
