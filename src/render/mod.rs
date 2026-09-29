@@ -1139,8 +1139,15 @@ impl Renderer {
                         let db = self.meshes[b].center.distance_squared(input.eye);
                         db.total_cmp(&da)
                     });
-                    pass.set_pipeline(&surf.blend);
-                    self.draw_surfaces(&mut pass, blended.into_iter());
+                    // Triangles inside one mesh aren't sorted, so a double-sided or two-layer
+                    // glass would blend its far layer over its near one in patches. Each mesh
+                    // writes its depth first and is then colored only where it's the nearest.
+                    for i in blended {
+                        pass.set_pipeline(&surf.depth_only);
+                        self.draw_surfaces(&mut pass, std::iter::once(i));
+                        pass.set_pipeline(&surf.blend);
+                        self.draw_surfaces(&mut pass, std::iter::once(i));
+                    }
                 }
             }
 
@@ -1614,7 +1621,8 @@ fn create_pipelines(
             opaque: mesh("mesh", (true, Cmp::Greater), None, all, cull),
             depth_only: mesh("mesh depth", (true, Cmp::Greater), None, wgpu::ColorWrites::empty(), cull),
             xray: mesh("mesh xray", (false, Cmp::Always), alpha, all, cull),
-            blend: mesh("mesh blend", (false, Cmp::Greater), alpha, all, cull),
+            // Equal passes too: a depth-only draw of the same mesh comes first (see the blend pass).
+            blend: mesh("mesh blend", (false, Cmp::GreaterEqual), alpha, all, cull),
         }),
         wire: wire("wire", Cmp::GreaterEqual),
         wire_xray: wire("wire xray", Cmp::Always),
