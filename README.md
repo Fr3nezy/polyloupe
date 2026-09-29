@@ -10,11 +10,16 @@ ZBrush, Unity...), shows what's really in the model. Native, free and open sourc
 
 **Every polygon, up close.**
 
+![PolyLoupe showing a Ferrari F40 in Solid shading with the Info panel](docs/media/hero-f40.jpg)
+
 ## Download
 
 Windows 10/11 (x64): get `PolyLoupe-Setup-<version>.exe` from the
 [latest release](../../releases/latest). The installer isn't code-signed yet, so SmartScreen may
-say "Windows protected your PC": choose **More info > Run anyway**.
+say "Windows protected your PC": choose **More info > Run anyway**. The installer is built from
+this repository by `scripts/build-installer.ps1`, and its SHA-256 is listed in the release notes.
+
+![Explorer showing PolyLoupe thumbnails for GLB and FBX files](docs/media/explorer-thumbnails.gif)
 
 ## What it does
 
@@ -42,6 +47,26 @@ say "Windows protected your PC": choose **More info > Run anyway**.
   (RMB + WASD fly), CAD (SolidWorks); Z-up or Y-up axis labels.
 - English and Italian UI (follows Windows by default).
 - Renders only when something changes: no GPU usage while idle.
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Texture channels cycling on a tank](docs/media/channels.gif) | ![Rendered shading with Blender's Forest HDRI](docs/media/rendered-hdri.jpg) |
+| Texture channels, one key away (C) | Rendered: PBR with Blender's HDRIs |
+| ![UV pane showing one material's texture set](docs/media/uv-texture-sets.jpg) | ![UV grid checker on a car](docs/media/uv-grid.jpg) |
+| UV layout of a whole texture set | UV grid checker |
+| ![Mesh check highlighting open edges](docs/media/mesh-check.jpg) | ![Cross-section of a car](docs/media/cross-section.jpg) |
+| Mesh check | Cross-section |
+| ![High and low poly tracks compared side by side](docs/media/compare.jpg) | |
+| A/B compare, high vs low poly | |
+
+## Feedback
+
+PolyLoupe is young and shaped by the people who use it. Found a model that opens wrong, or miss
+a check you do every day? [Open an issue](../../issues/new/choose) (Help > Report a bug or
+suggest a feature in the app), or start a [discussion](../../discussions). No telemetry: the app
+never sends anything anywhere.
 
 ## Controls
 

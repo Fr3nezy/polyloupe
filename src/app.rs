@@ -42,6 +42,8 @@ use crate::ui::widgets::{self};
 use crate::ui::{icons, theme};
 
 const APP_NAME: &str = "PolyLoupe";
+/// Public repository: issues, discussions and releases.
+const REPO_URL: &str = "https://github.com/Fr3nezy/polyloupe";
 /// Picks which decade of grid lines is visible for a given camera distance.
 const GRID_LEVEL_OFFSET: f32 = 1.05;
 

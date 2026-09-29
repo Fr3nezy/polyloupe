@@ -1,0 +1,20 @@
+name: Feature request
+description: Something PolyLoupe should do, or do differently.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you're trying to do
+      description: The task or check in your workflow, not only the feature. It helps find the best fit.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How you'd like it to work
+      description: How another tool does it (Blender, Maya, Marmoset, Unity...) is a great reference.
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
