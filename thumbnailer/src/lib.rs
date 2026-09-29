@@ -38,8 +38,8 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ,
-    REG_VALUE_TYPE, RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegGetValueW,
-    RegSetValueExW,
+    REG_VALUE_TYPE, RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteKeyW, RegDeleteTreeW,
+    RegGetValueW, RegSetValueExW,
 };
 use windows::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
 use windows::Win32::UI::Shell::PropertiesSystem::{
@@ -366,7 +366,8 @@ fn register(root: HKEY) -> Result<()> {
 }
 
 /// Removes this handler and the ones older builds registered. An extension's thumbnail handler
-/// entry is only removed when it points at one of ours.
+/// entry is only removed when it points at one of ours; a `ShellEx` key left empty goes too, since
+/// an empty per-user one can hide the machine-wide handler from Explorer.
 fn unregister(root: HKEY) {
     let ours: Vec<&str> = LEGACY_CLSIDS.iter().map(|(_, s)| *s).chain([CLSID_STRING]).collect();
     for ext in EXTENSIONS {
@@ -374,6 +375,9 @@ fn unregister(root: HKEY) {
         if get_value(root, &key).is_some_and(|v| ours.iter().any(|c| c.eq_ignore_ascii_case(&v))) {
             let _ = delete_tree(root, &key);
         }
+        // RegDeleteKeyW refuses keys that still have subkeys: only an empty ShellEx is removed.
+        let shellex = wide(&format!("{CLASSES}\\{ext}\\ShellEx"));
+        let _ = unsafe { RegDeleteKeyW(root, PCWSTR(shellex.as_ptr())) };
     }
     for clsid in ours {
         let _ = delete_tree(root, &format!("{CLASSES}\\CLSID\\{clsid}"));
