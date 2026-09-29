@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
@@ -180,6 +182,41 @@ struct Loading {
     started: Instant,
 }
 
+/// How long the hidden window waits for the model read at startup before it shows up anyway,
+/// with the model still loading.
+const PRELOAD_WAIT: Duration = Duration::from_millis(1000);
+
+/// Set when the saved window was maximized: `main` creates it un-maximized, because Windows shows
+/// a window as soon as it is maximized, long before its first frame is painted. The first frame
+/// maximizes it again as eframe shows it.
+pub static RESTORE_MAXIMIZED: AtomicBool = AtomicBool::new(false);
+
+/// The model given on the command line, read in the background from the start of `main`, so
+/// parsing overlaps the window and GPU setup.
+pub struct Preload {
+    path: PathBuf,
+    rx: Receiver<Result<Scene, String>>,
+    started: Instant,
+    /// Filled once the app exists, so a load that outlasts [`PRELOAD_WAIT`] can wake the UI.
+    repaint: Arc<OnceLock<egui::Context>>,
+}
+
+impl Preload {
+    /// `started` is when the app was launched: the "opened in" time counts from there.
+    pub fn start(path: PathBuf, started: Instant) -> Self {
+        let (tx, rx) = channel();
+        let repaint = Arc::new(OnceLock::<egui::Context>::new());
+        let (thread_path, thread_repaint) = (path.clone(), repaint.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(loader::load(&thread_path));
+            if let Some(ctx) = thread_repaint.get() {
+                ctx.request_repaint();
+            }
+        });
+        Self { path, rx, started, repaint }
+    }
+}
+
 struct Toast {
     text: String,
     until: f64,
@@ -257,6 +294,17 @@ pub struct ViewerApp {
     flying: bool,
     /// ZBrush: Shift was held while rotating, snap to an axis view on release.
     snap_on_release: bool,
+    /// Startup reveal of a window restored maximized (see [`RESTORE_MAXIMIZED`]).
+    reveal: Reveal,
+}
+
+/// A window restored maximized stays cloaked (see `cloak.rs`) until a frame at its maximized
+/// size has been painted.
+#[derive(Clone, Copy, PartialEq)]
+enum Reveal {
+    Done,
+    /// Cloaked; `painted` once a frame was drawn while maximized, `frames` counts as a safety net.
+    Cloaked { painted: bool, frames: u32 },
 }
 
 /// Drives `--capture`: waits for the scene and view to settle, screenshots, saves, quits.
@@ -267,7 +315,7 @@ struct CaptureState {
 }
 
 impl ViewerApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, launch: LaunchOptions) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, launch: LaunchOptions, preload: Option<Preload>) -> Self {
         theme::apply(&cc.egui_ctx);
         let mut settings: Settings = cc
             .storage
@@ -283,7 +331,7 @@ impl ViewerApp {
             log::info!("GPU: {} ({:?}, {:?})", info.name, info.backend, info.device_type);
             Renderer::new(&rs.device, &rs.queue)
         });
-        Self {
+        let mut app = Self {
             settings,
             camera: Camera::default(),
             renderer,
@@ -332,6 +380,29 @@ impl ViewerApp {
             texture_dirs: Vec::new(),
             flying: false,
             snap_on_release: false,
+            reveal: Reveal::Done,
+        };
+        if RESTORE_MAXIMIZED.load(Ordering::Relaxed) && crate::cloak::set_cloaked(cc, true) {
+            app.reveal = Reveal::Cloaked { painted: false, frames: 0 };
+        }
+        if let Some(preload) = preload {
+            app.finish_preload(&cc.egui_ctx, preload);
+        }
+        app
+    }
+
+    /// Waits briefly for the model read at startup, so the first frame, which is when the window
+    /// appears, already shows it. A slower file keeps loading in the background as usual.
+    fn finish_preload(&mut self, ctx: &egui::Context, preload: Preload) {
+        let _ = preload.repaint.set(ctx.clone());
+        match preload.rx.recv_timeout(PRELOAD_WAIT) {
+            Ok(result) => self.finish_loading(ctx, &preload.path, preload.started, result),
+            Err(RecvTimeoutError::Timeout) => {
+                self.loading = Some(Loading { path: preload.path, rx: preload.rx, started: preload.started });
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                self.finish_loading(ctx, &preload.path, preload.started, Err(tr("the loader stopped").into()));
+            }
         }
     }
 
@@ -637,10 +708,16 @@ impl ViewerApp {
         let Some(loading) = &self.loading else { return };
         let Ok(result) = loading.rx.try_recv() else { return };
         let loading = self.loading.take().expect("checked above");
+        self.finish_loading(ctx, &loading.path, loading.started, result);
+    }
+
+    /// Shows a freshly read model. `started` is when opening was asked for, so the "opened in"
+    /// time covers reading, uploading and (at launch) setting up the window and the GPU.
+    fn finish_loading(&mut self, ctx: &egui::Context, path: &Path, started: Instant, result: Result<Scene, String>) {
         let mut scene = match result {
             Ok(scene) => scene,
             Err(err) => {
-                let text = trf("Couldn't open {name}: {error}", &[("name", &file_name(&loading.path)), ("error", &err)]);
+                let text = trf("Couldn't open {name}: {error}", &[("name", &file_name(path)), ("error", &err)]);
                 self.show_toast(ctx, text, true);
                 return;
             }
@@ -668,9 +745,9 @@ impl ViewerApp {
                 }
             }
         }
-        let file_name = file_name(&loading.path);
+        let file_name = file_name(path);
         self.camera.reset(&scene.bounds);
-        let info = scene_info(&scene, &loading.path, loading.started.elapsed());
+        let info = scene_info(&scene, path, started.elapsed());
         let n = info.objects.len();
         self.selection.reset(n);
         self.measures.clear();
@@ -683,7 +760,7 @@ impl ViewerApp {
         self.pass_override = vec![None; n];
         let missing_count = info.missing.len();
         self.info = Some(info);
-        self.settings.push_recent(&loading.path.to_string_lossy());
+        self.settings.push_recent(&path.to_string_lossy());
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{file_name} — {APP_NAME}")));
         // Missing textures get a banner with a fix; other warnings a plain toast.
         let other: Vec<&String> = scene.warnings.iter().filter(|w| !w.starts_with(&missing_prefix())).collect();
@@ -1579,6 +1656,21 @@ impl eframe::App for ViewerApp {
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
+        if RESTORE_MAXIMIZED.swap(false, Ordering::Relaxed) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+        }
+        if let Reveal::Cloaked { painted, frames } = self.reveal {
+            let maximized = ctx.input(|i| i.viewport().maximized == Some(true));
+            // The previous frame was painted maximized: show it. Give up waiting after a few
+            // frames rather than ever leaving the window invisible.
+            if painted || frames > 10 {
+                crate::cloak::set_cloaked(&*frame, false);
+                self.reveal = Reveal::Done;
+            } else {
+                self.reveal = Reveal::Cloaked { painted: maximized, frames: frames + 1 };
+                ctx.request_repaint();
+            }
+        }
         self.sync_preferences(&ctx);
         if let Some(path) = self.pending_open.take() {
             self.open(path, &ctx);

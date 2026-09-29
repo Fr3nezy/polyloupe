@@ -2628,6 +2628,7 @@ dependencies = [
  "stl_io",
  "sys-locale",
  "ufbx",
+ "windows-sys 0.61.2",
  "winresource",
  "zip",
 ]

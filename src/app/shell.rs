@@ -1034,7 +1034,7 @@ impl ViewerApp {
         table(ui, |t| {
             t.row("Grid", &fmt_len(cell));
             t.row("Projection", &projection);
-            t.row("Loaded in", &load);
+            t.row("Opened in", &load);
         });
     }
 }
@@ -1360,7 +1360,7 @@ impl ViewerApp {
                 let mut parts = Vec::new();
                 if let Some(info) = &self.info {
                     parts.push(trf("{tris} tris", &[("tris", &thousands(info.triangles))]));
-                    parts.push(trf("loaded in {ms} ms", &[("ms", &info.load_time.as_millis())]));
+                    parts.push(trf("opened in {ms} ms", &[("ms", &info.load_time.as_millis())]));
                 }
                 if self.settings.show_fps {
                     parts.push(format!("{:.0} fps · {:.2} ms", self.fps, 1000.0 / self.fps.max(1e-3)));
