@@ -1,6 +1,6 @@
 //! UV layout pane (U): docked on the right of the 3D view, so it never covers the model.
-//! Shows the UV edges of the selected objects (or all visible ones) over the 0..1 square and,
-//! optionally, the base color texture; mirrored faces are filled red. Wheel zooms at the
+//! Shows the UV edges of the selected objects (or all visible ones), or of every object using
+//! one material (its texture set), over the 0..1 square and, optionally, the base color texture; mirrored faces are filled red. Wheel zooms at the
 //! cursor, any drag pans, double-click fits. The layout is rasterized on a worker thread for
 //! the visible window only (see `uv::rasterize`).
 
@@ -24,6 +24,10 @@ pub(super) struct UvView {
     center: [f32; 2],
     zoom: f32,
     show_texture: bool,
+    /// Texture set shown instead of the selection: every object using this material. Picking one
+    /// selects those objects; changing the selection afterwards goes back to following it.
+    material: Option<usize>,
+    material_selection: Vec<bool>,
     /// Pane width as a fraction of the viewport.
     width: f32,
     raster: Option<(RasterKey, Window, TextureHandle)>,
@@ -38,6 +42,8 @@ impl Default for UvView {
             center: [0.5, 0.5],
             zoom: 1.0,
             show_texture: true,
+            material: None,
+            material_selection: Vec::new(),
             width: DEFAULT_WIDTH,
             raster: None,
             job: None,
@@ -52,6 +58,7 @@ impl UvView {
         self.raster = None;
         self.job = None;
         self.textures.clear();
+        self.material = None;
         self.center = [0.5, 0.5];
         self.zoom = 1.0;
     }
@@ -91,8 +98,15 @@ impl ViewerApp {
             painter.text(canvas.center(), Align2::CENTER_CENTER, tr("Analyzing…"), FontId::proportional(13.0), theme::TEXT_DIM);
             return;
         };
+        if self.uv_view.material.is_some() && self.uv_view.material_selection != self.selection.selected {
+            self.uv_view.material = None;
+        }
         let selected: Vec<usize> = (0..self.visible.len()).filter(|&i| self.selection.selected[i]).collect();
-        let pool = if selected.is_empty() { (0..self.visible.len()).filter(|&i| self.visible[i]).collect() } else { selected };
+        let pool = match (self.uv_view.material, &self.info) {
+            (Some(m), Some(info)) => (0..info.objects.len()).filter(|&i| info.objects[i].material == m).collect(),
+            _ if selected.is_empty() => (0..self.visible.len()).filter(|&i| self.visible[i]).collect(),
+            _ => selected,
+        };
         let targets: Vec<usize> = pool.into_iter().filter(|&i| data.meshes.get(i).is_some_and(|m| m.is_some())).collect();
         self.uv_header(ui, header, Some(&data), &targets);
 
@@ -132,7 +146,10 @@ impl ViewerApp {
 
         // 0..1 square: texture or a flat tile, then the grid.
         let square = Rect::from_two_pos(to_screen(0.0, 0.0), to_screen(1.0, 1.0));
-        let material = self.selection.active.or(targets.first().copied()).and_then(|i| data.meshes[i].as_ref()).map(|m| m.material);
+        let material = match v.material {
+            Some(m) => Some(m),
+            None => self.selection.active.or(targets.first().copied()).and_then(|i| data.meshes[i].as_ref()).map(|m| m.material),
+        };
         let texture = material.filter(|_| v.show_texture).and_then(|m| {
             let (size, pixels) = data.textures.get(m)?.as_ref()?;
             Some(
@@ -207,8 +224,9 @@ impl ViewerApp {
         job.append("UV", 0.0, caps(theme::TEXT));
         if let Some(data) = data {
             let meshes: Vec<&uv::UvMesh> = targets.iter().filter_map(|&i| data.meshes[i].as_ref()).collect();
-            let name = match targets {
-                [one] => self.info.as_ref().map(|i| i.objects[*one].name.clone()).unwrap_or_default(),
+            let name = match (self.uv_view.material, targets) {
+                (Some(m), _) => self.info.as_ref().map(|i| i.materials[m].name.clone()).unwrap_or_default(),
+                (None, [one]) => self.info.as_ref().map(|i| i.objects[*one].name.clone()).unwrap_or_default(),
                 _ => trf("{n} objects", &[("n", &targets.len())]),
             };
             job.append(&format!("  ·  {name}"), 0.0, TextFormat { font_id: FontId::proportional(12.0), color: theme::TEXT_DIM, ..Default::default() });
@@ -235,8 +253,69 @@ impl ViewerApp {
             self.uv_view.center = [0.5, 0.5];
             self.uv_view.zoom = 1.0;
         }
+        self.uv_material_picker(&mut child);
         if text_button(&mut child, "Texture", self.uv_view.show_texture).on_hover_text(tr("Base color texture behind the layout")).clicked() {
             self.uv_view.show_texture = !self.uv_view.show_texture;
         }
+    }
+
+    /// Texture set dropdown: "Selection" follows the selected objects, a material shows (and
+    /// selects) every object that uses it.
+    fn uv_material_picker(&mut self, ui: &mut Ui) {
+        let Some(info) = &self.info else { return };
+        let mut used: Vec<(usize, usize)> = Vec::new();
+        for (mi, _) in info.materials.iter().enumerate() {
+            let n = info.objects.iter().filter(|o| o.material == mi).count();
+            if n > 0 {
+                used.push((mi, n));
+            }
+        }
+        if used.len() < 2 {
+            return;
+        }
+        let current = match self.uv_view.material {
+            Some(m) => info.materials[m].name.clone(),
+            None => tr("Selection").to_string(),
+        };
+        let mut pick = None;
+        egui::ComboBox::from_id_salt("uv_material")
+            .selected_text(current)
+            .width(170.0)
+            .height(480.0)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(self.uv_view.material.is_none(), tr("Selection")).on_hover_text(tr("UVs of the selected objects")).clicked() {
+                    pick = Some(None);
+                }
+                ui.separator();
+                for &(mi, n) in &used {
+                    let label = format!("{}  ({n})", info.materials[mi].name);
+                    if ui.selectable_label(self.uv_view.material == Some(mi), label).clicked() {
+                        pick = Some(Some(mi));
+                    }
+                }
+            })
+            .response
+            .on_hover_text(tr("Texture set: every object using one material"));
+        match pick {
+            Some(Some(m)) => self.uv_show_material(m),
+            Some(None) => self.uv_view.material = None,
+            None => {}
+        }
+    }
+
+    /// Shows material `m`'s texture set and selects the objects that use it.
+    pub(super) fn uv_show_material(&mut self, m: usize) {
+        let Some(info) = &self.info else { return };
+        if m >= info.materials.len() {
+            return;
+        }
+        let objects: Vec<usize> = (0..info.objects.len()).filter(|&i| info.objects[i].material == m).collect();
+        self.selection.selected.fill(false);
+        for &i in &objects {
+            self.selection.selected[i] = true;
+        }
+        self.selection.active = objects.first().copied();
+        self.uv_view.material = Some(m);
+        self.uv_view.material_selection = self.selection.selected.clone();
     }
 }

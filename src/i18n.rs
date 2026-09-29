@@ -336,6 +336,8 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Mirrored" => "Ribaltate",
         "Outside 0–1" => "Fuori 0–1",
         "Close UV view (U)" => "Chiudi la vista UV (U)",
+        "UVs of the selected objects" => "UV degli oggetti selezionati",
+        "Texture set: every object using one material" => "Texture set: tutti gli oggetti con un materiale",
         "Fit the 0–1 square (double-click)" => "Inquadra il quadrato 0–1 (doppio clic)",
         "Base color texture behind the layout" => "Texture base color dietro il layout",
         "Texture" => "Texture",
