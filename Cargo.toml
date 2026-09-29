@@ -3,7 +3,7 @@ name = "polyloupe"
 version = "0.1.0"
 edition = "2024"
 description = "Fast, native 3D model viewer with a Blender-style viewport"
-license = "MIT OR Apache-2.0"
+license = "GPL-3.0-or-later"
 
 [workspace]
 members = [".", "core", "thumbnailer"]

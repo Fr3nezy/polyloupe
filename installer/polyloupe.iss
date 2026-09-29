@@ -56,6 +56,8 @@ italian.Launch=Avvia Poly Loupe
 [Files]
 Source: "..\target\release\polyloupe.exe"; DestDir: "{app}"; Flags: ignoreversion uninsrestartdelete
 Source: "..\target\release\polyloupe_thumbs.dll"; DestDir: "{app}"; Flags: ignoreversion uninsrestartdelete
+Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
+Source: "..\target\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Registry]
 ; File type for "Open with" and Default apps. Windows no longer lets an installer take over a file

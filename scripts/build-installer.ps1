@@ -10,6 +10,10 @@ $root = Resolve-Path (Join-Path $PSScriptRoot '..')
 & cargo build --release --workspace --manifest-path (Join-Path $root 'Cargo.toml')
 if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
 
+# License texts of everything the binaries include, installed next to LICENSE.
+& python (Join-Path $root 'scripts	hird-party-notices.py')
+if ($LASTEXITCODE -ne 0) { throw 'third-party-notices.py failed' }
+
 # build.rs draws the icon into its OUT_DIR; the setup wizard uses the same one.
 $ico = Get-ChildItem (Join-Path $root 'target\release\build') -Recurse -Filter app.ico |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1

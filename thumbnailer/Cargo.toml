@@ -3,7 +3,7 @@ name = "polyloupe-thumbs"
 version = "0.1.0"
 edition = "2024"
 description = "Windows Explorer thumbnail handler for Poly Loupe"
-license = "MIT OR Apache-2.0"
+license = "GPL-3.0-or-later"
 
 [lib]
 name = "polyloupe_thumbs"
