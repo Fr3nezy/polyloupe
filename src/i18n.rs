@@ -453,7 +453,7 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Z, height" => "Z, altezza",
         "Name" => "Nome",
         "Projection" => "Proiezione",
-        "Loaded in" => "Caricato in",
+        "Opened in" => "Aperto in",
         "{ms} ms" => "{ms} ms",
         "{n} textures weren't found next to the file. Point to the folder that has them." => {
             "{n} texture non trovate accanto al file. Indica la cartella che le contiene."
@@ -468,7 +468,8 @@ fn italian_text(en: &str) -> Option<&'static str> {
         }
         "{n} tri" => "{n} tri",
         "{tris} tris" => "{tris} tri",
-        "loaded in {ms} ms" => "caricato in {ms} ms",
+        "opened in {ms} ms" => "aperto in {ms} ms",
+        "the loader stopped" => "il caricamento si è interrotto",
         "No file open" => "Nessun file aperto",
         "Drop a model here" => "Trascina qui un modello",
         "or open it from disk. Textures are looked up in the same folder." => {
