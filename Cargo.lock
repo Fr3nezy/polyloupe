@@ -2653,6 +2653,7 @@ name = "polyloupe-thumbs"
 version = "0.1.0"
 dependencies = [
  "image",
+ "polyloupe-core",
  "windows",
  "windows-core",
 ]

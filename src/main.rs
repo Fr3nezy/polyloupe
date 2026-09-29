@@ -27,15 +27,9 @@ fn main() -> eframe::Result {
     env_logger::init();
     polyloupe_core::i18n::set_translator(|en| i18n::tr(en).to_string());
 
-    // Headless thumbnail mode for the Explorer handler: no window, no saved state.
+    // The Explorer thumbnail, rendered headless (no window, no saved state), to check what
+    // Explorer will show.
     let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
-    if args.get(1).is_some_and(|a| a == "--thumbnail-server") {
-        if let Err(e) = thumbnail::serve() {
-            eprintln!("polyloupe: {e}");
-            std::process::exit(1);
-        }
-        return Ok(());
-    }
     if args.get(1).is_some_and(|a| a == "--thumbnail") {
         let (Some(input), Some(output)) = (args.get(2), args.get(3)) else {
             eprintln!("usage: polyloupe --thumbnail INPUT OUTPUT.png [SIZE]");

@@ -6,3 +6,4 @@ pub mod formats;
 pub mod i18n;
 pub mod loader;
 pub mod scene;
+pub mod thumbnail;

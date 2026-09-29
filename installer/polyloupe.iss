@@ -5,8 +5,8 @@
 ;
 ; Output: target\installer\PolyLoupe-Setup-<version>.exe
 ;
-; The thumbnail handler is registered machine-wide (regsvr32 /n /i:allusers): only then does
-; Windows honour DisableProcessIsolation, which .gltf and .obj need to reach the files next to them.
+; The thumbnail handler is registered machine-wide (regsvr32 /n /i:allusers). It renders on its
+; own inside Windows' isolated thumbnail process, so no GPU or helper process is involved.
 
 #define AppVersion "0.1.0"
 
@@ -124,9 +124,9 @@ Filename: "{sys}\regsvr32.exe"; Parameters: "/s /u /n /i:allusers ""{app}\polylo
     Flags: runhidden waituntilterminated; RunOnceId: "UnregisterThumbnails"
 
 [Code]
-// Explorer keeps the thumbnail DLL loaded and the thumbnail server keeps polyloupe.exe running for
-// up to a minute: files in use cannot be overwritten but can be renamed. Move them aside so the
-// new ones can be copied, and clear leftovers from earlier updates once nothing holds them.
+// Windows' thumbnail process (or Explorer, with earlier builds) may hold the thumbnail DLL, and
+// the app may be open: files in use cannot be overwritten but can be renamed. Move them aside so
+// the new ones can be copied, and clear leftovers from earlier updates once nothing holds them.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Dir, Dll: String;
