@@ -1,4 +1,4 @@
-//! Embeds the app icon (`assets/brand/icon/*.png`, made by `assets/brand/make_brand.py`) and
+//! Embeds the app icon (`assets/brand/icon/*.png`) and
 //! version info into the Windows executable, so Explorer, the taskbar and associated file types
 //! show it.
 

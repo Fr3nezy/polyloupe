@@ -131,8 +131,6 @@ window screenshot.
 
 Capture runs never change your saved preferences.
 
-See [PLAN.md](PLAN.md) for the roadmap.
-
 ## License
 
 PolyLoupe is free software: you can redistribute it and/or modify it under the terms of the

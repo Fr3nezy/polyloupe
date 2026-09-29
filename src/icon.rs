@@ -1,4 +1,4 @@
-//! Window and taskbar icon: the PolyLoupe app icon (see `assets/brand/make_brand.py`).
+//! Window and taskbar icon: the PolyLoupe app icon (`assets/brand/icon`).
 
 use eframe::egui::IconData;
 
