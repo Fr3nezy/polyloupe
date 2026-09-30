@@ -230,10 +230,9 @@ struct Toast {
 
 pub struct ViewerApp {
     settings: Settings,
-    /// Where the HUD chips were drawn this frame, and how wide the viewport toolbar was: the
-    /// toolbar steps aside for the chips when the viewport is too narrow for both.
-    hud_rect: std::cell::Cell<Rect>,
-    toolbar_width: f32,
+    /// Where the viewport toolbar was last drawn: the HUD chips, gizmo and channel strip move
+    /// below it when the viewport is too narrow for them to share the top edge.
+    toolbar_rect: Rect,
     camera: Camera,
     renderer: Option<Renderer>,
     info: Option<SceneInfo>,
@@ -340,8 +339,7 @@ impl ViewerApp {
         });
         let mut app = Self {
             settings,
-            hud_rect: std::cell::Cell::new(Rect::NOTHING),
-            toolbar_width: 0.0,
+            toolbar_rect: Rect::NOTHING,
             camera: Camera::default(),
             renderer,
             info: None,
@@ -1410,7 +1408,8 @@ impl ViewerApp {
                 self.channel_strip(&ctx, rect, gizmo_shown);
             }
             if gizmo_shown {
-                let center = pos2(rect.right() - gizmo::WIDTH * 0.5 - 16.0, rect.top() + gizmo::WIDTH * 0.5 + 16.0);
+                let top = self.overlay_top(rect, rect.right() - 16.0 - gizmo::WIDTH, rect.right() - 16.0);
+                let center = pos2(rect.right() - gizmo::WIDTH * 0.5 - 16.0, top + gizmo::WIDTH * 0.5);
                 let ppp = ctx.pixels_per_point();
                 for action in gizmo::show(ui, center, &self.camera, self.settings.up_axis) {
                     match action {
