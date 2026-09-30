@@ -25,9 +25,10 @@ this repository by `scripts/build-installer.ps1`, and its SHA-256 is listed in t
 
 - Opens glTF/GLB, FBX, OBJ (with MTL textures), STL, PLY, 3MF and COLLADA (.dae); files load on a
   background thread.
-  glTF support covers metallic-roughness PBR, skinning, morph targets, animation and
-  `KHR_texture_transform`; other extensions are ignored, and a file that requires one (Draco, meshopt,
-  ...) still opens with a warning, though it may look wrong or be incomplete.
+  glTF support covers metallic-roughness PBR, skinning, morph targets, animation,
+  `KHR_texture_transform` and `EXT_texture_webp`; other extensions are ignored, and a file that
+  requires one (Draco, meshopt, ...) still opens with a warning, though it may look wrong or be
+  incomplete. All 150 Khronos glTF Sample Assets open.
 - Explorer thumbnails for all of them (rendered by a small self-contained handler, like Blender's
   for .blend files), plus "Open with" and Default apps entries.
 - Wireframe, Solid and Rendered shading, like Blender:
