@@ -362,7 +362,8 @@ impl ViewerApp {
             if shifted + half <= viewport.right() - gizmo_room {
                 pos.x = shifted;
             } else {
-                pos.y = hud.bottom() + 4.0;
+                // Below the chips, lined up with them, which keeps it clear of the gizmo.
+                pos = pos2(hud.left() + 8.0 + half, hud.bottom() + 4.0);
             }
         }
         // Never spill over the tool strip on the left (or off the right edge).
