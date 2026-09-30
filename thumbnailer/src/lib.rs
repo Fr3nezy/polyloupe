@@ -266,10 +266,10 @@ impl IThumbnailProvider_Impl for PathThumbnailProvider_Impl {
 
 /// `polyloupe.exe` next to this DLL (the install folder), else wherever the installer registered it.
 fn viewer_exe() -> Option<PathBuf> {
-    if let Some(beside) = module_path().and_then(|p| p.parent().map(|d| d.join("polyloupe.exe"))) {
-        if beside.is_file() {
-            return Some(beside);
-        }
+    if let Some(beside) = module_path().and_then(|p| p.parent().map(|d| d.join("polyloupe.exe")))
+        && beside.is_file()
+    {
+        return Some(beside);
     }
     let command = get_value(HKEY_LOCAL_MACHINE, "Software\\Classes\\Applications\\polyloupe.exe\\shell\\open\\command")?;
     let exe = PathBuf::from(command.trim_start().strip_prefix('"')?.split('"').next()?);
