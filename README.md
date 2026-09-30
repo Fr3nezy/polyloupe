@@ -124,9 +124,11 @@ doesn't let installers pick the default app themselves).
 
 The thumbnail handler works like Blender's handler for .blend files: Windows runs it in its
 isolated thumbnail process and hands it the file's bytes, and the DLL parses the model and renders
-it on the CPU (no GPU, no helper process), in about 30 ms for a typical model. Files next to the
-model are out of its reach there: an .obj renders without its .mtl, and a .gltf with external
-buffers keeps the normal icon. `polyloupe --thumbnail model.glb out.png 256` renders exactly what
+it on the CPU (no GPU, no helper process), in about 30 ms for a typical model. .gltf and .obj files
+can keep their data in files next to them (buffers, .mtl, textures), which that isolated process
+can't see, so those two formats get a second handler, built like F3D's: Windows gives it the
+file's path, and it runs `polyloupe --thumbnail` in a separate process with a timeout, so a broken
+file never takes Explorer down. `polyloupe --thumbnail model.glb out.png 256` renders exactly what
 Explorer shows.
 
 Without the installer:

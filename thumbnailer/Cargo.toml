@@ -10,6 +10,8 @@ name = "polyloupe_thumbs"
 crate-type = ["cdylib"]
 
 [dependencies]
+# Reads back the PNG that `polyloupe.exe --thumbnail` writes for the path handler.
+image = { version = "0.25", default-features = false, features = ["png"] }
 polyloupe-core = { path = "../core" }
 windows-core = "0.62"
 windows = { version = "0.62", features = [
@@ -25,6 +27,3 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell_PropertiesSystem",
 ] }
 
-[dev-dependencies]
-# The probe example saves the thumbnail as a PNG.
-image = { version = "0.25", default-features = false, features = ["png"] }

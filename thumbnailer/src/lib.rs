@@ -1,9 +1,17 @@
-//! Explorer thumbnail handler (IThumbnailProvider) for 3D model files.
+//! Explorer thumbnail handlers (IThumbnailProvider) for 3D model files. Two classes:
 //!
-//! Self-contained, like Blender's `.blend` handler: the DLL parses the model and renders it on
-//! the CPU (`polyloupe_core::thumbnail`), with no GPU, helper process, socket or server. That lets
-//! Windows run it isolated in its thumbnail process (`dllhost`), which only hands the handler a
-//! stream of the file's bytes: the same path for every drive and every caller.
+//! - Stream handler, for single-file formats (.glb .fbx .stl .ply .3mf .dae). Self-contained,
+//!   like Blender's `.blend` handler: the DLL parses the model and renders it on the CPU
+//!   (`polyloupe_core::thumbnail`), with no GPU, helper process, socket or server. That lets
+//!   Windows run it isolated in its thumbnail process (`dllhost`), which only hands the handler a
+//!   stream of the file's bytes: the same path for every drive and every caller.
+//! - Path handler, for formats that keep data in files next to the model (.gltf with external
+//!   buffers and textures, .obj with its .mtl). Those need the file's path, which Windows only
+//!   gives a handler that opts out of isolation (`DisableProcessIsolation`), so it runs inside
+//!   Explorer. Like F3D's handler, it never parses the model there: it runs
+//!   `polyloupe.exe --thumbnail` (the same CPU renderer, no window) with a timeout and reads back
+//!   the PNG, so a bad file can only take down that child process. It implements no stream
+//!   initializer on purpose: Explorer prefers the stream whenever a handler offers one.
 //!
 //! Registration:
 //! - all users (HKLM, admin, what the installer does): `regsvr32 /n /i:allusers`, and
@@ -37,7 +45,7 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
 use windows::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ,
+    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_WRITE, REG_DWORD, REG_OPTION_NON_VOLATILE, REG_SZ,
     REG_VALUE_TYPE, RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteKeyW, RegDeleteTreeW,
     RegGetValueW, RegSetValueExW,
 };
@@ -60,9 +68,15 @@ const LEGACY_CLSIDS: [(GUID, &str); 2] = [
     (GUID::from_u128(0x1fcd9853_22d9_46b7_a5c0_cba9444584c9), "{1fcd9853-22d9-46b7-a5c0-cba9444584c9}"),
     (GUID::from_u128(0x1db9db9f_86bc_47bb_88ed_99c5551e49f1), "{1db9db9f-86bc-47bb-88ed-99c5551e49f1}"),
 ];
+const CLSID_PATH_THUMBNAILER: GUID = GUID::from_u128(0xdc5c1405_f891_448f_8713_3de1d48c455c);
+const CLSID_PATH_STRING: &str = "{dc5c1405-f891-448f-8713-3de1d48c455c}";
 /// The shell's IThumbnailProvider handler category.
 const THUMBNAIL_HANDLER_KEY: &str = "{e357fccd-a995-4576-b01f-234630154e96}";
 const EXTENSIONS: &[&str] = &[".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply", ".3mf", ".dae"];
+/// Formats whose data can live in other files: served by the path handler.
+const PATH_EXTENSIONS: &[&str] = &[".gltf", ".obj"];
+/// How long the path handler waits for `polyloupe.exe --thumbnail` before killing it.
+const VIEWER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 static MODULE: AtomicIsize = AtomicIsize::new(0);
 static SEQUENCE: AtomicU32 = AtomicU32::new(0);
@@ -100,7 +114,9 @@ fn module_path() -> Option<PathBuf> {
 // --- COM objects -------------------------------------------------------------------------------
 
 #[implement(IClassFactory)]
-struct Factory;
+struct Factory {
+    path_based: bool,
+}
 
 impl IClassFactory_Impl for Factory_Impl {
     fn CreateInstance(
@@ -112,7 +128,11 @@ impl IClassFactory_Impl for Factory_Impl {
         if outer.is_some() {
             return Err(CLASS_E_NOAGGREGATION.into());
         }
-        let provider: IUnknown = ThumbnailProvider::default().into();
+        let provider: IUnknown = if self.path_based {
+            PathThumbnailProvider::default().into()
+        } else {
+            ThumbnailProvider::default().into()
+        };
         unsafe { provider.query(riid, object).ok() }
     }
 
@@ -191,6 +211,117 @@ impl IThumbnailProvider_Impl for ThumbnailProvider_Impl {
         }
         Ok(())
     }
+}
+
+/// The path handler: runs inside Explorer, so all it does there is start the viewer.
+#[implement(IThumbnailProvider, IInitializeWithItem, IInitializeWithFile)]
+#[derive(Default)]
+struct PathThumbnailProvider {
+    path: Mutex<Option<PathBuf>>,
+}
+
+impl PathThumbnailProvider_Impl {
+    fn store(&self, path: PathBuf) -> Result<()> {
+        *self.path.lock().map_err(|_| windows_core::Error::from(E_FAIL))? = Some(path);
+        Ok(())
+    }
+}
+
+impl IInitializeWithFile_Impl for PathThumbnailProvider_Impl {
+    fn Initialize(&self, path: &PCWSTR, _mode: u32) -> Result<()> {
+        let path = unsafe { path.to_string() }.map_err(|_| windows_core::Error::from(E_FAIL))?;
+        self.store(PathBuf::from(path))
+    }
+}
+
+impl IInitializeWithItem_Impl for PathThumbnailProvider_Impl {
+    fn Initialize(&self, item: Ref<IShellItem>, _mode: u32) -> Result<()> {
+        let name = unsafe { item.ok()?.GetDisplayName(SIGDN_FILESYSPATH)? };
+        let path = unsafe { name.to_string() };
+        unsafe { CoTaskMemFree(Some(name.0 as *const c_void)) };
+        self.store(PathBuf::from(path.map_err(|_| windows_core::Error::from(E_FAIL))?))
+    }
+}
+
+impl IThumbnailProvider_Impl for PathThumbnailProvider_Impl {
+    fn GetThumbnail(&self, cx: u32, bitmap: *mut HBITMAP, alpha: *mut WTS_ALPHATYPE) -> Result<()> {
+        let started = std::time::Instant::now();
+        let path = self.path.lock().map_err(|_| windows_core::Error::from(E_FAIL))?.clone();
+        let path = path.ok_or(windows_core::Error::from(E_UNEXPECTED))?;
+        let size = cx.clamp(16, 1024);
+        let rendered = render_with_viewer(&path, size);
+        log(|| match &rendered {
+            Ok(_) => format!("{size}px ok via polyloupe.exe in {} ms: {}", started.elapsed().as_millis(), path.display()),
+            Err(e) => format!("{size}px FAILED via polyloupe.exe in {} ms: {}: {e}", started.elapsed().as_millis(), path.display()),
+        });
+        let (width, height, rgba) = rendered.map_err(|_| windows_core::Error::from(E_FAIL))?;
+        let hbitmap = to_hbitmap(width, height, &rgba)?;
+        unsafe {
+            *bitmap = hbitmap;
+            *alpha = WTSAT_ARGB;
+        }
+        Ok(())
+    }
+}
+
+/// `polyloupe.exe` next to this DLL (the install folder), else wherever the installer registered it.
+fn viewer_exe() -> Option<PathBuf> {
+    if let Some(beside) = module_path().and_then(|p| p.parent().map(|d| d.join("polyloupe.exe"))) {
+        if beside.is_file() {
+            return Some(beside);
+        }
+    }
+    let command = get_value(HKEY_LOCAL_MACHINE, "Software\\Classes\\Applications\\polyloupe.exe\\shell\\open\\command")?;
+    let exe = PathBuf::from(command.trim_start().strip_prefix('"')?.split('"').next()?);
+    exe.is_file().then_some(exe)
+}
+
+/// Renders `path` with `polyloupe.exe --thumbnail` in a child process, which can read the files
+/// next to the model. The child is killed if it outlives `VIEWER_TIMEOUT`.
+fn render_with_viewer(path: &Path, size: u32) -> std::result::Result<(u32, u32, Vec<u8>), String> {
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let exe = viewer_exe().ok_or("polyloupe.exe not found")?;
+    let out = std::env::temp_dir().join(format!(
+        "polyloupe-thumb-{}-{}.png",
+        std::process::id(),
+        SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut child = Command::new(&exe)
+        .arg("--thumbnail")
+        .arg(path)
+        .arg(&out)
+        .arg(size.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map_err(|e| format!("couldn't start {}: {e}", exe.display()))?;
+    let deadline = std::time::Instant::now() + VIEWER_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(10)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&out);
+                return Err("polyloupe.exe timed out".into());
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    };
+    let image = if status.success() {
+        image::open(&out).map_err(|e| format!("couldn't read the thumbnail: {e}"))
+    } else {
+        Err(format!("polyloupe.exe failed ({status})"))
+    };
+    let _ = std::fs::remove_file(&out);
+    let rgba = image?.to_rgba8();
+    Ok((rgba.width(), rgba.height(), rgba.into_raw()))
 }
 
 /// Loads and renders a model. Parsers and the renderer run under `catch_unwind`: a malformed file
@@ -293,10 +424,11 @@ extern "system" fn DllGetClassObject(
         return CLASS_E_CLASSNOTAVAILABLE;
     }
     let clsid = unsafe { *clsid };
-    if clsid != CLSID_THUMBNAILER && !LEGACY_CLSIDS.iter().any(|(g, _)| *g == clsid) {
+    let path_based = clsid == CLSID_PATH_THUMBNAILER;
+    if !path_based && clsid != CLSID_THUMBNAILER && !LEGACY_CLSIDS.iter().any(|(g, _)| *g == clsid) {
         return CLASS_E_CLASSNOTAVAILABLE;
     }
-    let factory: IClassFactory = Factory.into();
+    let factory: IClassFactory = Factory { path_based }.into();
     unsafe { factory.query(riid, object) }
 }
 
@@ -354,13 +486,22 @@ const CLASSES: &str = "Software\\Classes";
 fn register(root: HKEY) -> Result<()> {
     unregister(root);
     let dll = module_path().ok_or(windows_core::Error::from(E_FAIL))?;
-    let key = format!("{CLASSES}\\CLSID\\{CLSID_STRING}");
-    set_value(root, &key, None, "PolyLoupe Thumbnail Provider")?;
-    let server = format!("{key}\\InprocServer32");
-    set_value(root, &server, None, &dll.to_string_lossy())?;
-    set_value(root, &server, Some("ThreadingModel"), "Apartment")?;
+    for (clsid, name) in [
+        (CLSID_STRING, "PolyLoupe Thumbnail Provider"),
+        (CLSID_PATH_STRING, "PolyLoupe Thumbnail Provider (files next to the model)"),
+    ] {
+        let key = format!("{CLASSES}\\CLSID\\{clsid}");
+        set_value(root, &key, None, name)?;
+        let server = format!("{key}\\InprocServer32");
+        set_value(root, &server, None, &dll.to_string_lossy())?;
+        set_value(root, &server, Some("ThreadingModel"), "Apartment")?;
+    }
+    // The only way Windows hands a thumbnail handler the file's path (see the module docs).
+    let path_key = format!("{CLASSES}\\CLSID\\{CLSID_PATH_STRING}");
+    write_value(root, &path_key, Some("DisableProcessIsolation"), REG_DWORD, &1u32.to_le_bytes())?;
     for ext in EXTENSIONS {
-        set_value(root, &handler_key(ext), None, CLSID_STRING)?;
+        let clsid = if PATH_EXTENSIONS.contains(ext) { CLSID_PATH_STRING } else { CLSID_STRING };
+        set_value(root, &handler_key(ext), None, clsid)?;
     }
     Ok(())
 }
@@ -369,7 +510,7 @@ fn register(root: HKEY) -> Result<()> {
 /// entry is only removed when it points at one of ours; a `ShellEx` key left empty goes too, since
 /// an empty per-user one can hide the machine-wide handler from Explorer.
 fn unregister(root: HKEY) {
-    let ours: Vec<&str> = LEGACY_CLSIDS.iter().map(|(_, s)| *s).chain([CLSID_STRING]).collect();
+    let ours: Vec<&str> = LEGACY_CLSIDS.iter().map(|(_, s)| *s).chain([CLSID_STRING, CLSID_PATH_STRING]).collect();
     for ext in EXTENSIONS {
         let key = handler_key(ext);
         if get_value(root, &key).is_some_and(|v| ours.iter().any(|c| c.eq_ignore_ascii_case(&v))) {
