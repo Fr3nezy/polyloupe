@@ -30,7 +30,13 @@ fn main() -> windows_core::Result<()> {
         let lib = LoadLibraryW(PCWSTR(dll_w.as_ptr()))?;
         let proc = GetProcAddress(lib, s!("DllGetClassObject")).expect("DllGetClassObject export");
         let get: GetClassObject = std::mem::transmute(proc);
-        let clsid = GUID::from_u128(0x0e196db0_b2ec_4fbc_b2e4_5fd1b0bf39df);
+        // The class Explorer would pick: the path handler for formats with files next to them.
+        let lower = model.to_ascii_lowercase();
+        let clsid = if lower.ends_with(".gltf") || lower.ends_with(".obj") {
+            GUID::from_u128(0xdc5c1405_f891_448f_8713_3de1d48c455c)
+        } else {
+            GUID::from_u128(0x0e196db0_b2ec_4fbc_b2e4_5fd1b0bf39df)
+        };
         let mut factory: *mut c_void = std::ptr::null_mut();
         get(&clsid, &IClassFactory::IID, &mut factory).ok()?;
         let factory = IClassFactory::from_raw(factory);

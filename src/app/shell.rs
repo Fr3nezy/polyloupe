@@ -350,9 +350,15 @@ impl ViewerApp {
         let mut frame = false;
         let mut shading_panel = false;
         let mut compare_action = super::compare::CompareAction::None;
-        egui::Area::new(Id::new("viewport_toolbar"))
+        // Always top center; the other overlays make room for it (see `overlay_top`). Only when
+        // the viewport is narrower than the toolbar does it slide, so it never covers the tool
+        // strip on the left.
+        let half = self.toolbar_rect.width() * 0.5;
+        let mut pos = pos2(viewport.center().x, viewport.top() + 12.0);
+        pos.x = pos.x.min(viewport.right() - half - 8.0).max(viewport.left() + half + 8.0);
+        let area = egui::Area::new(Id::new("viewport_toolbar"))
             .order(Order::Middle)
-            .fixed_pos(pos2(viewport.center().x, viewport.top() + 12.0))
+            .fixed_pos(pos)
             .pivot(Align2::CENTER_TOP)
             .show(ctx, |ui| {
                 toolbar(ui, |ui| {
@@ -445,6 +451,11 @@ impl ViewerApp {
                     }
                 });
             });
+        if area.response.rect != self.toolbar_rect {
+            // The overlays drawn before it this frame used the old rect.
+            self.toolbar_rect = area.response.rect;
+            ctx.request_repaint();
+        }
         if shading_panel {
             self.toggle_inspector_tab(InspectorTab::Shading);
         }
@@ -533,7 +544,8 @@ impl ViewerApp {
             n => trf("{n} selected objects", &[("n", &n)]),
         };
         let overrides = self.pass_override.iter().filter(|p| p.is_some()).count();
-        let top = viewport.top() + 16.0 + if below_gizmo { gizmo::WIDTH + 12.0 } else { 0.0 };
+        let column = self.overlay_top(viewport, viewport.right() - 16.0 - gizmo::WIDTH, viewport.right() - 16.0);
+        let top = column + if below_gizmo { gizmo::WIDTH + 12.0 } else { 0.0 };
         let mut action = None;
         egui::Area::new(Id::new("channel_strip"))
             .order(Order::Middle)
@@ -795,6 +807,18 @@ impl ViewerApp {
         }
     }
 
+    /// Top of an overlay spanning `left..right` along the viewport's top edge: 16 px down, or
+    /// below the viewport toolbar when the two would overlap (small window, large UI scale,
+    /// inspector open). The toolbar keeps its place; the HUD chips, gizmo and channel strip move.
+    pub(super) fn overlay_top(&self, viewport: Rect, left: f32, right: f32) -> f32 {
+        let bar = self.toolbar_rect;
+        if bar.is_positive() && left < bar.right() + 8.0 && right > bar.left() - 8.0 {
+            bar.bottom() + 8.0
+        } else {
+            viewport.top() + 16.0
+        }
+    }
+
     /// Top-left chip ("USER PERSPECTIVE · SOLID"), optional stats, and the grid scale bar.
     pub(super) fn hud(&self, ui: &Ui, viewport: Rect) {
         let painter = ui.painter();
@@ -814,9 +838,10 @@ impl ViewerApp {
                 ));
             }
         }
-        let mut y = viewport.top() + 16.0;
-        for line in lines {
-            let galley = painter.layout_job(theme::caps(&line, 11.0, theme::TEXT_DIM));
+        let galleys: Vec<_> = lines.iter().map(|l| painter.layout_job(theme::caps(l, 11.0, theme::TEXT_DIM))).collect();
+        let widest = galleys.iter().map(|g| g.size().x + 20.0).fold(0.0, f32::max);
+        let mut y = self.overlay_top(viewport, viewport.left() + 16.0, viewport.left() + 16.0 + widest);
+        for galley in galleys {
             let chip = Rect::from_min_size(pos2(viewport.left() + 16.0, y), galley.size() + vec2(20.0, 12.0));
             painter.rect_filled(chip, CornerRadius::same(2), Color32::from_black_alpha(204));
             painter.galley(chip.min + vec2(10.0, 6.0), galley, theme::TEXT_DIM);

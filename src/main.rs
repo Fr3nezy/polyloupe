@@ -55,6 +55,9 @@ fn main() -> eframe::Result {
         }
     };
     migrate_settings();
+    // A model opened at launch loads while the window starts, before the settings are read:
+    // pick the language now so its warnings come out translated.
+    i18n::set(saved_language());
 
     // With "Open files in the same window" on, the running window takes the file instead.
     if launch.capture.is_none() && launch.open.as_deref().is_some_and(instance::forward) {
@@ -148,6 +151,22 @@ fn wgpu_setup() -> egui_wgpu::WgpuSetup {
 
 /// Settings saved before the app was renamed live under an old app id ("Poly Loupe", before that
 /// "3D Viewer"): carry the newest over once.
+/// The interface language saved in the settings, read straight from eframe's `app.ron` (the
+/// settings are nested in it as an escaped RON string, so a plain search does). The app sets the
+/// language again from its settings once the window exists.
+fn saved_language() -> i18n::Language {
+    let saved = eframe::storage_dir("PolyLoupe").and_then(|d| std::fs::read_to_string(d.join("app.ron")).ok());
+    let value = saved.as_deref().and_then(|s| {
+        let rest = s[s.find("language:")? + "language:".len()..].trim_start();
+        Some(rest[..rest.find(|c: char| !c.is_ascii_alphanumeric()).unwrap_or(rest.len())].to_string())
+    });
+    match value.as_deref() {
+        Some("English") => i18n::Language::English,
+        Some("Italian") => i18n::Language::Italian,
+        _ => i18n::Language::System,
+    }
+}
+
 fn migrate_settings() {
     let Some(new) = eframe::storage_dir("PolyLoupe") else { return };
     let new_file = new.join("app.ron");

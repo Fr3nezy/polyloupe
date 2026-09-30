@@ -2609,7 +2609,7 @@ dependencies = [
 
 [[package]]
 name = "polyloupe"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "bytemuck",
@@ -2635,7 +2635,7 @@ dependencies = [
 
 [[package]]
 name = "polyloupe-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "glam",
@@ -2651,7 +2651,7 @@ dependencies = [
 
 [[package]]
 name = "polyloupe-thumbs"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "image",
  "polyloupe-core",

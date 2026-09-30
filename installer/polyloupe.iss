@@ -6,9 +6,10 @@
 ; Output: target\installer\PolyLoupe-Setup-<version>.exe
 ;
 ; The thumbnail handler is registered machine-wide (regsvr32 /n /i:allusers). It renders on its
-; own inside Windows' isolated thumbnail process, so no GPU or helper process is involved.
+; own inside Windows' isolated thumbnail process, with no GPU; .gltf and .obj go through a second
+; class that gets the file's path and runs polyloupe.exe --thumbnail (see thumbnailer/src/lib.rs).
 
-#define AppVersion "0.1.0"
+#define AppVersion "0.1.1"
 
 [Setup]
 AppId={{24342D06-700F-425F-BDEF-C297766C9278}

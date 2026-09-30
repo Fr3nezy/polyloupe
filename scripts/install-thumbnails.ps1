@@ -6,8 +6,10 @@
 #
 # Copies polyloupe_thumbs.dll out of the build folder (so rebuilding the project never fights with
 # Windows holding the DLL), then registers the handler for .glb .gltf .fbx .obj .stl .ply .3mf .dae.
-# The DLL renders on its own (no GPU, no polyloupe.exe) inside Windows' thumbnail process, which
-# only hands it the file's bytes: .obj renders without its .mtl, .gltf with external files fails.
+# The DLL renders on its own (no GPU) inside Windows' thumbnail process, which only hands it the
+# file's bytes. .gltf and .obj, which can keep data in files next to them, go through a second
+# handler that gets the path and runs polyloupe.exe --thumbnail, so polyloupe.exe must sit next to
+# the DLL (or be installed).
 #
 # Current user: %LOCALAPPDATA%\Programs\PolyLoupe, HKCU, no admin rights.
 # All users: %ProgramFiles%\PolyLoupe, HKLM, what the installer does. Prefer it: the thumbnail
@@ -56,13 +58,17 @@ if (-not (Test-Path (Join-Path $build 'polyloupe_thumbs.dll'))) {
 }
 
 New-Item -ItemType Directory -Force $dest | Out-Null
-# Windows' thumbnail process keeps the DLL loaded, so it cannot be overwritten. A loaded DLL can
-# still be renamed: move it aside and delete the leftovers once nothing holds them.
+# Windows' thumbnail process and Explorer keep the DLL loaded (and polyloupe.exe may be running),
+# so they cannot be overwritten. A loaded file can still be renamed: move it aside and delete the
+# leftovers once nothing holds them.
 Get-ChildItem $dest -Filter '*.old' | Remove-Item -Force -ErrorAction SilentlyContinue
-if (Test-Path $dll) {
-    try { Remove-Item $dll -Force } catch { Rename-Item $dll "polyloupe_thumbs.dll.$([guid]::NewGuid().ToString('N')).old" }
+foreach ($name in 'polyloupe_thumbs.dll', 'polyloupe.exe') {
+    $target = Join-Path $dest $name
+    if (Test-Path $target) {
+        try { Remove-Item $target -Force } catch { Rename-Item $target "$name.$([guid]::NewGuid().ToString('N')).old" }
+    }
+    Copy-Item (Join-Path $build $name) $dest
 }
-Copy-Item (Join-Path $build 'polyloupe_thumbs.dll') $dest
 # The all-users registration also removes per-user ones, which would shadow it.
 Invoke-Regsvr32 (@('/s') + $scope) $dll
 

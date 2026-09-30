@@ -238,8 +238,6 @@ impl ViewerApp {
             job.append(&format!("   {} ", tr("Outside 0–1")), 0.0, small(theme::TEXT_DIM));
             job.append(&thousands(outside), 0.0, small(theme::TEXT));
         }
-        let galley = painter.layout_job(job);
-        painter.galley(pos2(header.left() + 14.0, header.center().y - galley.size().y * 0.5), galley, theme::TEXT);
 
         let mut child = ui.new_child(UiBuilder::new().max_rect(header.shrink2(vec2(6.0, 4.0))).layout(Layout::right_to_left(Align::Center)));
         child.spacing_mut().item_spacing.x = 2.0;
@@ -257,6 +255,14 @@ impl ViewerApp {
         if text_button(&mut child, "Texture", self.uv_view.show_texture).on_hover_text(tr("Base color texture behind the layout")).clicked() {
             self.uv_view.show_texture = !self.uv_view.show_texture;
         }
+        // The text stops where the buttons start, so a narrow pane cuts it instead of hiding
+        // it under them.
+        let mut text_clip = header;
+        text_clip.max.x = child.min_rect().left() - 8.0;
+        let galley = painter.layout_job(job);
+        painter
+            .with_clip_rect(text_clip)
+            .galley(pos2(header.left() + 14.0, header.center().y - galley.size().y * 0.5), galley, theme::TEXT);
     }
 
     /// Texture set dropdown: "Selection" follows the selected objects, a material shows (and

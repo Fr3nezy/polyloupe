@@ -248,15 +248,37 @@ fn percent_decode(s: &str) -> String {
 // ---------------------------------------------------------------------------------------------
 // glTF / GLB
 
+/// Opens a glTF without failing on `extensionsRequired` entries the gltf crate doesn't know
+/// (Draco, meshopt, mesh quantization, ...): the file is still validated, and the unknown
+/// extensions become a warning, so what can be shown is shown instead of refusing the file.
+fn open_gltf(path: &Path) -> Result<(gltf::Document, Option<Vec<u8>>, Vec<String>), String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("Invalid glTF: {e}"))?;
+    let gltf = gltf::Gltf::from_reader_without_validation(std::io::BufReader::new(file))
+        .map_err(|e| format!("Invalid glTF: {e}"))?;
+    let mut root = gltf.document.into_json();
+    let known = gltf::json::extensions::ENABLED_EXTENSIONS;
+    let (kept, unknown): (Vec<String>, Vec<String>) =
+        std::mem::take(&mut root.extensions_required).into_iter().partition(|e| known.contains(&e.as_str()));
+    root.extensions_required = kept;
+    let doc = gltf::Document::from_json(root).map_err(|e| format!("Invalid glTF: {e}"))?;
+    let mut warnings = Vec::new();
+    if !unknown.is_empty() {
+        warnings.push(trf(
+            "Unsupported glTF extensions ({list}): the model may look wrong or be incomplete",
+            &[("list", &unknown.join(", "))],
+        ));
+    }
+    Ok((doc, gltf.blob, warnings))
+}
+
 fn load_gltf(path: &Path, texture_dirs: &[PathBuf]) -> Result<Scene, String> {
     use base64::Engine;
 
-    let gltf = gltf::Gltf::open(path).map_err(|e| format!("Invalid glTF: {e}"))?;
+    let (doc, blob, mut warnings) = open_gltf(path)?;
+    let doc = &doc;
     let base = path.parent().unwrap_or(Path::new("."));
-    let buffers = gltf::import_buffers(&gltf.document, Some(base), gltf.blob.clone())
+    let buffers = gltf::import_buffers(doc, Some(base), blob)
         .map_err(|e| format!("Couldn't read glTF buffers: {e}"))?;
-    let doc = &gltf.document;
-    let mut warnings = Vec::new();
 
     let jobs: Vec<ImageJob> = doc
         .images()
@@ -1070,3 +1092,17 @@ pub fn load_environment(path: &Path) -> Result<EnvImage, String> {
     Ok(EnvImage { width, height, pixels })
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gltf_with_unknown_required_extension_loads_with_warning() {
+        let path = std::env::temp_dir().join("polyloupe_unknown_ext.gltf");
+        let json = r#"{"asset":{"version":"2.0"},"extensionsUsed":["KHR_made_up"],"extensionsRequired":["KHR_made_up"],"scenes":[{"nodes":[]}],"scene":0}"#;
+        std::fs::write(&path, json).unwrap();
+        let scene = load(&path).expect("file should load");
+        let _ = std::fs::remove_file(&path);
+        assert!(scene.warnings.iter().any(|w| w.contains("KHR_made_up")), "{:?}", scene.warnings);
+    }
+}

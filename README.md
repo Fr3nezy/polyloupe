@@ -25,6 +25,9 @@ this repository by `scripts/build-installer.ps1`, and its SHA-256 is listed in t
 
 - Opens glTF/GLB, FBX, OBJ (with MTL textures), STL, PLY, 3MF and COLLADA (.dae); files load on a
   background thread.
+  glTF support covers metallic-roughness PBR, skinning, morph targets, animation and
+  `KHR_texture_transform`; other extensions are ignored, and a file that requires one (Draco, meshopt,
+  ...) still opens with a warning, though it may look wrong or be incomplete.
 - Explorer thumbnails for all of them (rendered by a small self-contained handler, like Blender's
   for .blend files), plus "Open with" and Default apps entries.
 - Wireframe, Solid and Rendered shading, like Blender:
@@ -121,9 +124,11 @@ doesn't let installers pick the default app themselves).
 
 The thumbnail handler works like Blender's handler for .blend files: Windows runs it in its
 isolated thumbnail process and hands it the file's bytes, and the DLL parses the model and renders
-it on the CPU (no GPU, no helper process), in about 30 ms for a typical model. Files next to the
-model are out of its reach there: an .obj renders without its .mtl, and a .gltf with external
-buffers keeps the normal icon. `polyloupe --thumbnail model.glb out.png 256` renders exactly what
+it on the CPU (no GPU, no helper process), in about 30 ms for a typical model. .gltf and .obj files
+can keep their data in files next to them (buffers, .mtl, textures), which that isolated process
+can't see, so those two formats get a second handler, built like F3D's: Windows gives it the
+file's path, and it runs `polyloupe --thumbnail` in a separate process with a timeout, so a broken
+file never takes Explorer down. `polyloupe --thumbnail model.glb out.png 256` renders exactly what
 Explorer shows.
 
 Without the installer:
