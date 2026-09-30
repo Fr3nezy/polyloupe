@@ -248,19 +248,77 @@ fn percent_decode(s: &str) -> String {
 // ---------------------------------------------------------------------------------------------
 // glTF / GLB
 
-/// Opens a glTF without failing on `extensionsRequired` entries the gltf crate doesn't know
-/// (Draco, meshopt, mesh quantization, ...): the file is still validated, and the unknown
-/// extensions become a warning, so what can be shown is shown instead of refusing the file.
+/// Opens a glTF (or GLB) that the gltf crate would refuse as a whole for one part it doesn't
+/// handle, so what can be shown is shown and the rest becomes a warning:
+/// - `extensionsRequired` entries it doesn't know (Draco, meshopt, ...) are dropped;
+/// - animation channels without a target node (`KHR_animation_pointer`) are dropped;
+/// - textures whose image only comes from an extension (`EXT_texture_webp`, `KHR_texture_basisu`,
+///   ...) get that image as their source; ones we can't decode fail like any bad texture.
 fn open_gltf(path: &Path) -> Result<(gltf::Document, Option<Vec<u8>>, Vec<String>), String> {
-    let file = std::fs::File::open(path).map_err(|e| format!("Invalid glTF: {e}"))?;
-    let gltf = gltf::Gltf::from_reader_without_validation(std::io::BufReader::new(file))
-        .map_err(|e| format!("Invalid glTF: {e}"))?;
-    let mut root = gltf.document.into_json();
+    let invalid = |e: &dyn std::fmt::Display| format!("Invalid glTF: {e}");
+    let bytes = std::fs::read(path).map_err(|e| invalid(&e))?;
+    let (json, blob) = if bytes.starts_with(b"glTF") {
+        let glb = gltf::binary::Glb::from_slice(&bytes).map_err(|e| invalid(&e))?;
+        (glb.json.into_owned(), glb.bin.map(|b| b.into_owned()))
+    } else {
+        (bytes, None)
+    };
+    let mut value: serde_json::Value = serde_json::from_slice(&json).map_err(|e| invalid(&e))?;
+    let mut unknown: Vec<String> = Vec::new();
+
     let known = gltf::json::extensions::ENABLED_EXTENSIONS;
-    let (kept, unknown): (Vec<String>, Vec<String>) =
-        std::mem::take(&mut root.extensions_required).into_iter().partition(|e| known.contains(&e.as_str()));
-    root.extensions_required = kept;
-    let doc = gltf::Document::from_json(root).map_err(|e| format!("Invalid glTF: {e}"))?;
+    if let Some(required) = value.get_mut("extensionsRequired").and_then(|v| v.as_array_mut()) {
+        required.retain(|e| {
+            let name = e.as_str().unwrap_or_default();
+            let keep = known.contains(&name);
+            if !keep {
+                unknown.push(name.to_string());
+            }
+            keep
+        });
+    }
+    if let Some(animations) = value.get_mut("animations").and_then(|v| v.as_array_mut()) {
+        for animation in animations {
+            if let Some(channels) = animation.get_mut("channels").and_then(|v| v.as_array_mut()) {
+                let before = channels.len();
+                channels.retain(|c| c.pointer("/target/node").is_some());
+                if channels.len() < before && !unknown.iter().any(|u| u == "KHR_animation_pointer") {
+                    unknown.push("KHR_animation_pointer".into());
+                }
+            }
+        }
+    }
+    if let Some(textures) = value.get_mut("textures").and_then(|v| v.as_array_mut()) {
+        for texture in textures {
+            if texture.get("source").is_some() {
+                continue;
+            }
+            let from_extension = texture
+                .get("extensions")
+                .and_then(|e| e.as_object())
+                .and_then(|e| e.values().find_map(|x| x.get("source").cloned()));
+            if let (Some(source), Some(texture)) = (from_extension, texture.as_object_mut()) {
+                texture.insert("source".into(), source);
+            }
+        }
+    }
+
+    let root: gltf::json::Root = serde_json::from_value(value).map_err(|e| invalid(&e))?;
+    // Accessors without a bufferView are valid glTF (all zeros), and Draco / meshopt meshes are
+    // made of them, but the gltf crate reports them as missing data. When those are the only
+    // errors, load anyway: their primitives read no positions and are skipped.
+    let doc = match gltf::Document::from_json(root.clone()) {
+        Ok(doc) => doc,
+        Err(gltf::Error::Validation(errors))
+            if errors.iter().all(|(path, e)| {
+                let path = path.as_str();
+                *e == gltf::json::validation::Error::Missing && path.starts_with("accessors[") && path.ends_with("].bufferView")
+            }) =>
+        {
+            gltf::Document::from_json_without_validation(root)
+        }
+        Err(e) => return Err(invalid(&e)),
+    };
     let mut warnings = Vec::new();
     if !unknown.is_empty() {
         warnings.push(trf(
@@ -268,7 +326,25 @@ fn open_gltf(path: &Path) -> Result<(gltf::Document, Option<Vec<u8>>, Vec<String
             &[("list", &unknown.join(", "))],
         ));
     }
-    Ok((doc, gltf.blob, warnings))
+    Ok((doc, blob, warnings))
+}
+
+/// Indices of a triangle strip or fan as a plain triangle list, keeping the winding of every
+/// triangle the same as the first (glTF 2.0 spec, 3.7.2.1).
+fn triangle_list(mode: gltf::mesh::Mode, indices: Vec<u32>) -> Vec<u32> {
+    use gltf::mesh::Mode;
+    let n = indices.len();
+    match mode {
+        Mode::TriangleStrip if n >= 3 => (0..n - 2)
+            .flat_map(|i| {
+                let (a, b, c) = (indices[i], indices[i + 1], indices[i + 2]);
+                if i % 2 == 0 { [a, b, c] } else { [b, a, c] }
+            })
+            .collect(),
+        Mode::TriangleFan if n >= 3 => (1..n - 1).flat_map(|i| [indices[i], indices[i + 1], indices[0]]).collect(),
+        Mode::TriangleStrip | Mode::TriangleFan => Vec::new(),
+        _ => indices,
+    }
 }
 
 fn load_gltf(path: &Path, texture_dirs: &[PathBuf]) -> Result<Scene, String> {
@@ -417,7 +493,10 @@ fn load_gltf(path: &Path, texture_dirs: &[PathBuf]) -> Result<Scene, String> {
         let base_name = node.name().or_else(|| mesh.name()).unwrap_or("Mesh").to_string();
         let prim_count = mesh.primitives().len();
         for (pi, prim) in mesh.primitives().enumerate() {
-            if prim.mode() != gltf::mesh::Mode::Triangles {
+            // Strips and fans are surfaces too, unrolled below; points and lines aren't shown.
+            use gltf::mesh::Mode;
+            let mode = prim.mode();
+            if !matches!(mode, Mode::Triangles | Mode::TriangleStrip | Mode::TriangleFan) {
                 continue;
             }
             let reader = prim.reader(|b| buffers.get(b.index()).map(|d| &d.0[..]));
@@ -428,6 +507,7 @@ fn load_gltf(path: &Path, texture_dirs: &[PathBuf]) -> Result<Scene, String> {
                 Some(i) => i.into_u32().collect(),
                 None => (0..count as u32).collect(),
             };
+            let indices = triangle_list(mode, indices);
             vertex_count += count;
             let material = prim.material().index().unwrap_or(default_material);
             let needs_tangents = materials[material].normal_tex.is_some();
@@ -1095,6 +1175,32 @@ pub fn load_environment(path: &Path) -> Result<EnvImage, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pointer_animations_and_extension_only_textures_load() {
+        let path = std::env::temp_dir().join("polyloupe_pointer_webp.gltf");
+        let json = r#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"scene":0,"nodes":[{}],
+            "extensionsUsed":["KHR_animation_pointer","EXT_texture_webp"],
+            "images":[{"uri":"missing.webp"}],
+            "textures":[{"extensions":{"EXT_texture_webp":{"source":0}}}],
+            "buffers":[{"byteLength":8,"uri":"data:application/octet-stream;base64,AAAAAAAAgD8="}],
+            "bufferViews":[{"buffer":0,"byteLength":8}],
+            "accessors":[{"bufferView":0,"componentType":5126,"count":2,"type":"SCALAR","min":[0],"max":[1]}],
+            "animations":[{"samplers":[{"input":0,"output":0}],
+                "channels":[{"sampler":0,"target":{"path":"pointer","extensions":{"KHR_animation_pointer":{"pointer":"/nodes/0/weights"}}}}]}]}"#;
+        std::fs::write(&path, json).unwrap();
+        let scene = load(&path).expect("file should load");
+        let _ = std::fs::remove_file(&path);
+        assert!(scene.warnings.iter().any(|w| w.contains("KHR_animation_pointer")), "{:?}", scene.warnings);
+    }
+
+    #[test]
+    fn strips_and_fans_become_triangle_lists() {
+        use gltf::mesh::Mode;
+        assert_eq!(triangle_list(Mode::TriangleStrip, vec![0, 1, 2, 3, 4]), vec![0, 1, 2, 2, 1, 3, 2, 3, 4]);
+        assert_eq!(triangle_list(Mode::TriangleFan, vec![0, 1, 2, 3]), vec![1, 2, 0, 2, 3, 0]);
+        assert!(triangle_list(Mode::TriangleFan, vec![0, 1]).is_empty());
+    }
 
     #[test]
     fn gltf_with_unknown_required_extension_loads_with_warning() {
