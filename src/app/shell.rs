@@ -350,9 +350,26 @@ impl ViewerApp {
         let mut frame = false;
         let mut shading_panel = false;
         let mut compare_action = super::compare::CompareAction::None;
-        egui::Area::new(Id::new("viewport_toolbar"))
+        // Centered, unless that lands on the HUD chips: then slide right of them, and when there
+        // isn't room for that either (small window, large UI scale, inspector open) drop below.
+        let half = self.toolbar_width * 0.5;
+        let hud = self.hud_rect.get().expand(8.0);
+        let mut pos = pos2(viewport.center().x, viewport.top() + 12.0);
+        let overlaps = |x: f32, y: f32| hud.is_positive() && Rect::from_min_max(pos2(x - half, y), pos2(x + half, y + theme::TOOLBAR_HEIGHT + 8.0)).intersects(hud);
+        if overlaps(pos.x, pos.y) {
+            let shifted = hud.right() + half;
+            let gizmo_room = if self.settings.show_gizmo { gizmo::WIDTH + 32.0 } else { 16.0 };
+            if shifted + half <= viewport.right() - gizmo_room {
+                pos.x = shifted;
+            } else {
+                pos.y = hud.bottom() + 4.0;
+            }
+        }
+        // Never spill over the tool strip on the left (or off the right edge).
+        pos.x = pos.x.min(viewport.right() - half - 8.0).max(viewport.left() + half + 8.0);
+        let area = egui::Area::new(Id::new("viewport_toolbar"))
             .order(Order::Middle)
-            .fixed_pos(pos2(viewport.center().x, viewport.top() + 12.0))
+            .fixed_pos(pos)
             .pivot(Align2::CENTER_TOP)
             .show(ctx, |ui| {
                 toolbar(ui, |ui| {
@@ -445,6 +462,7 @@ impl ViewerApp {
                     }
                 });
             });
+        self.toolbar_width = area.response.rect.width();
         if shading_panel {
             self.toggle_inspector_tab(InspectorTab::Shading);
         }
@@ -815,13 +833,16 @@ impl ViewerApp {
             }
         }
         let mut y = viewport.top() + 16.0;
+        let mut extent = Rect::NOTHING;
         for line in lines {
             let galley = painter.layout_job(theme::caps(&line, 11.0, theme::TEXT_DIM));
             let chip = Rect::from_min_size(pos2(viewport.left() + 16.0, y), galley.size() + vec2(20.0, 12.0));
             painter.rect_filled(chip, CornerRadius::same(2), Color32::from_black_alpha(204));
             painter.galley(chip.min + vec2(10.0, 6.0), galley, theme::TEXT_DIM);
             y = chip.bottom() + 6.0;
+            extent = extent.union(chip);
         }
+        self.hud_rect.set(extent);
 
         if self.settings.show_grid && self.info.is_some() {
             let level = self.camera.view.distance.max(1e-6).log10() - GRID_LEVEL_OFFSET;
