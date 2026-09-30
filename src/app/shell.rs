@@ -807,7 +807,6 @@ impl ViewerApp {
         }
     }
 
-    /// Top-left chip ("USER PERSPECTIVE · SOLID"), optional stats, and the grid scale bar.
     /// Top of an overlay spanning `left..right` along the viewport's top edge: 16 px down, or
     /// below the viewport toolbar when the two would overlap (small window, large UI scale,
     /// inspector open). The toolbar keeps its place; the HUD chips, gizmo and channel strip move.
@@ -820,6 +819,7 @@ impl ViewerApp {
         }
     }
 
+    /// Top-left chip ("USER PERSPECTIVE · SOLID"), optional stats, and the grid scale bar.
     pub(super) fn hud(&self, ui: &Ui, viewport: Rect) {
         let painter = ui.painter();
         let shading = match self.settings.shading {

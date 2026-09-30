@@ -183,6 +183,9 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Couldn't open {name}: {error}" => "Impossibile aprire {name}: {error}",
         "{first} (+{more} more)" => "{first} (+{more} altri)",
         "Missing texture: {name}" => "Texture mancante: {name}",
+        "Unsupported glTF extensions ({list}): the model may look wrong or be incomplete" => {
+            "Estensioni glTF non supportate ({list}): il modello potrebbe apparire sbagliato o incompleto"
+        }
         "Couldn't decode texture {name}: {error}" => "Impossibile decodificare la texture {name}: {error}",
         "Save image" => "Salva immagine",
         "PNG image" => "Immagine PNG",

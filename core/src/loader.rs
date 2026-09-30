@@ -263,7 +263,10 @@ fn open_gltf(path: &Path) -> Result<(gltf::Document, Option<Vec<u8>>, Vec<String
     let doc = gltf::Document::from_json(root).map_err(|e| format!("Invalid glTF: {e}"))?;
     let mut warnings = Vec::new();
     if !unknown.is_empty() {
-        warnings.push(format!("Unsupported glTF extensions ({}): the model may look wrong or be incomplete", unknown.join(", ")));
+        warnings.push(trf(
+            "Unsupported glTF extensions ({list}): the model may look wrong or be incomplete",
+            &[("list", &unknown.join(", "))],
+        ));
     }
     Ok((doc, gltf.blob, warnings))
 }
@@ -1088,7 +1091,6 @@ pub fn load_environment(path: &Path) -> Result<EnvImage, String> {
     let pixels = rgb.pixels().map(|p| [p[0], p[1], p[2], 1.0]).collect();
     Ok(EnvImage { width, height, pixels })
 }
-
 
 #[cfg(test)]
 mod tests {
