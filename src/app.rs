@@ -121,6 +121,8 @@ enum PickPurpose {
     MeasureHover { free: bool },
     /// Move tool: lay the clicked face on the bed.
     LayFace,
+    /// Move tool: the face under the cursor while choosing one to lay on the bed.
+    LayHover,
 }
 
 /// Blender-style selection: a set plus one active object.
@@ -283,6 +285,8 @@ pub struct ViewerApp {
     transform_undo: Vec<Vec<Mat4>>,
     transform_drag: Option<transform::Drag>,
     lay_face_armed: bool,
+    lay_hover: Option<(Vec3, Vec3)>,
+    lay_hover_px: Option<[u32; 2]>,
     /// Second model for the A/B comparison, and one being loaded.
     compare: Option<compare::Compare>,
     compare_loading: Option<Loading>,
@@ -385,6 +389,8 @@ impl ViewerApp {
             transform_undo: Vec::new(),
             transform_drag: None,
             lay_face_armed: false,
+            lay_hover: None,
+            lay_hover_px: None,
             compare: None,
             compare_loading: None,
             env_image: None,
@@ -1449,6 +1455,17 @@ impl ViewerApp {
                 };
                 self.pending_pick = Some((to_px(pos), purpose));
             }
+        } else if self.tool == Tool::Move && self.lay_face_armed && self.info.is_some() && self.pending_pick.is_none() {
+            // A --lay capture has no real pointer: keep its simulated one.
+            let simulated = self.capture.as_ref().is_some_and(|c| c.opts.lay_hover.is_some());
+            let hover = if simulated { self.lay_hover_px } else { response.hover_pos().map(to_px) };
+            if hover != self.lay_hover_px {
+                self.lay_hover_px = hover;
+                match hover {
+                    Some(p) => self.pending_pick = Some((p, PickPurpose::LayHover)),
+                    None => self.lay_hover = None,
+                }
+            }
         } else if self.tool == Tool::Measure && self.info.is_some() && self.pending_pick.is_none() {
             // Follow the cursor with a pick only when it moves: each pick waits for the GPU.
             let hover = response.hover_pos().map(to_px);
@@ -1628,6 +1645,10 @@ impl ViewerApp {
                 self.lay_on_picked_face(ui.ctx(), hit.flatten(), point);
                 ui.ctx().request_repaint();
             }
+            (Some(PickPurpose::LayHover), _) => {
+                self.lay_hover_at(hit.flatten(), point);
+                ui.ctx().request_repaint();
+            }
             _ => {}
         }
     }
@@ -1659,7 +1680,14 @@ impl ViewerApp {
         }
         cap.frames += 1;
         // Move tool steps run once the mesh analysis is in (frame 3 waits for it).
-        let (frames, rotate, auto_orient, export_model) = (cap.frames, cap.opts.rotate, cap.opts.auto_orient, cap.opts.export_model.clone());
+        let (frames, rotate, auto_orient, export_model, lay_hover) =
+            (cap.frames, cap.opts.rotate, cap.opts.auto_orient, cap.opts.export_model.clone(), cap.opts.lay_hover);
+        if let (4, Some(p)) = (frames, lay_hover) {
+            self.tool = Tool::Move;
+            self.lay_face_armed = true;
+            self.lay_hover_px = Some(p);
+            self.pending_pick = Some((p, PickPurpose::LayHover));
+        }
         if frames == 3 {
             if let Some([x, y, z]) = rotate {
                 let r = Mat4::from_euler(glam::EulerRot::XYZ, x.to_radians(), y.to_radians(), z.to_radians());

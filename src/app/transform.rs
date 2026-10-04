@@ -52,12 +52,13 @@ struct Geometry {
 }
 
 impl ViewerApp {
-    /// Objects the Move tool acts on: the visible selection, or the only object of the scene.
+    /// Objects the Move tool acts on: the visible selection, or with nothing selected the whole
+    /// visible model (a part made of several solids moves as one).
     pub(super) fn transform_targets(&self) -> Vec<usize> {
         let Some(info) = &self.info else { return Vec::new() };
         let visible = |i: usize| self.visible.get(i).copied().unwrap_or(true);
         let selected: Vec<usize> = (0..info.objects.len()).filter(|&i| self.selection.selected.get(i).copied().unwrap_or(false) && visible(i)).collect();
-        if selected.is_empty() && info.objects.len() == 1 && visible(0) { vec![0] } else { selected }
+        if selected.is_empty() { (0..info.objects.len()).filter(|&i| visible(i)).collect() } else { selected }
     }
 
     fn targets_bounds(&self, targets: &[usize]) -> Aabb {
@@ -115,17 +116,6 @@ impl ViewerApp {
         self.transforms_changed(true);
     }
 
-    /// Rotates object `i` so the world direction `down` points to -Z (the bed), keeping it where
-    /// it was, then sets it on the bed. The caller takes the undo snapshot.
-    fn lay_down(&mut self, i: usize, down: Vec3) {
-        let Some(o) = self.info.as_ref().map(|info| info.objects[i].bounds.center()) else { return };
-        let rotation = glam::Quat::from_rotation_arc(down.normalize(), Vec3::NEG_Z);
-        let m = Mat4::from_translation(o) * Mat4::from_quat(rotation) * Mat4::from_translation(-o);
-        self.user_transforms[i] = m * self.user_transforms[i];
-        self.transforms_changed(true);
-        self.drop_to_bed(&[i], false);
-    }
-
     /// Moves `targets` straight down (or up) until their lowest point touches Z = 0.
     fn drop_to_bed(&mut self, targets: &[usize], undo: bool) {
         let Some(info) = &self.info else { return };
@@ -145,30 +135,57 @@ impl ViewerApp {
             self.show_toast(ctx, tr("Still analyzing the model, try again in a moment").to_string(), false);
             return;
         }
-        let downs: Vec<(usize, Vec3)> = targets.iter().filter_map(|&i| Some((i, self.snap.get(i)?.best_down_direction()?))).collect();
-        if downs.is_empty() {
+        // The targets turn as one, so an assembly stays assembled.
+        let meshes: Vec<&snap::SnapMesh> = targets.iter().filter_map(|&i| self.snap.get(i)).collect();
+        let Some(down) = snap::best_down_direction(&meshes) else {
             self.show_toast(ctx, tr("No flat face to lay the model on").to_string(), false);
             return;
-        }
+        };
         self.push_transform_undo(self.user_transforms.clone());
-        for (i, down) in downs {
-            self.lay_down(i, down);
-        }
+        self.lay_group(&targets, down);
     }
 
-    /// Lay on face: the clicked face goes down on the bed.
+    /// Lay on face: the clicked face goes down on the bed. Every object the Move tool acts on
+    /// turns with it when the clicked one is among them, so a multi-part model stays together.
     pub(super) fn lay_on_picked_face(&mut self, ctx: &egui::Context, object: Option<usize>, point: Option<Vec3>) {
-        self.lay_face_armed = false;
         let (Some(i), Some(p)) = (object, point) else { return };
         let Some(normal) = self.snap.get(i).and_then(|s| s.face_normal(p)) else {
             self.show_toast(ctx, tr("Still analyzing the model, try again in a moment").to_string(), false);
             return;
         };
+        self.lay_face_armed = false;
+        self.lay_hover = None;
+        let targets = self.transform_targets();
+        let group = if targets.contains(&i) { targets } else { vec![i] };
         self.push_transform_undo(self.user_transforms.clone());
-        self.lay_down(i, normal);
-        if !self.selection.selected.get(i).copied().unwrap_or(false) {
-            self.selection.click(Some(i), false);
+        self.lay_group(&group, normal);
+    }
+
+    /// Like `lay_down`, for several objects turning together around their common center.
+    fn lay_group(&mut self, group: &[usize], down: Vec3) {
+        let c = self.targets_bounds(group).center();
+        let rotation = glam::Quat::from_rotation_arc(down.normalize(), Vec3::NEG_Z);
+        let m = Mat4::from_translation(c) * Mat4::from_quat(rotation) * Mat4::from_translation(-c);
+        for &i in group {
+            self.user_transforms[i] = m * self.user_transforms[i];
         }
+        self.transforms_changed(true);
+        // Down as one: the group's lowest point touches the bed.
+        let lift = -self.targets_bounds(group).min.z;
+        if lift.is_finite() {
+            for &i in group {
+                self.user_transforms[i] = Mat4::from_translation(Vec3::Z * lift) * self.user_transforms[i];
+            }
+            self.transforms_changed(true);
+        }
+    }
+
+    /// Lay on face, while choosing: the face under the cursor (surface point and outward normal).
+    pub(super) fn lay_hover_at(&mut self, object: Option<usize>, point: Option<Vec3>) {
+        self.lay_hover = match (object, point) {
+            (Some(i), Some(p)) => self.snap.get(i).and_then(|s| s.face_normal(p)).map(|n| (p, n)),
+            _ => None,
+        };
     }
 
     pub(super) fn reset_transforms(&mut self) {
@@ -326,8 +343,69 @@ impl ViewerApp {
         true
     }
 
+    /// Lay on face, while choosing: what to do, and the face under the cursor as a disc lying on
+    /// it with an arrow pointing where it will go (down, onto the bed).
+    fn draw_lay_preview(&self, ui: &Ui, viewport: Rect) {
+        let painter = ui.painter().with_clip_rect(viewport);
+        let shadow = Color32::from_black_alpha(160);
+        // Instruction under the toolbar, where the eye already is.
+        let text = tr("Click the face that goes on the bed · Esc to cancel");
+        let galley = painter.layout_no_wrap(text.to_string(), theme::medium(13.0), theme::ON_ACCENT);
+        let top = self.toolbar_rect.bottom().max(viewport.top()) + 10.0;
+        let chip = Rect::from_center_size(pos2(viewport.center().x, top + galley.size().y * 0.5 + 7.0), galley.size() + vec2(24.0, 14.0));
+        painter.rect_filled(chip, CornerRadius::same(theme::RADIUS), theme::ACCENT);
+        painter.galley(chip.min + vec2(12.0, 7.0), galley, theme::ON_ACCENT);
+
+        let Some((p, n)) = self.lay_hover else { return };
+        let aspect = viewport.width() / viewport.height().max(1.0);
+        let view_proj = self.camera.projection(aspect) * self.camera.view_matrix();
+        let project = |w: Vec3| {
+            let c = view_proj * w.extend(1.0);
+            (c.w > 1e-6).then(|| {
+                let q = c.truncate() / c.w;
+                pos2(viewport.left() + (q.x * 0.5 + 0.5) * viewport.width(), viewport.top() + (0.5 - q.y * 0.5) * viewport.height())
+            })
+        };
+        let (Some(at), Some(side)) = (project(p), project(p + self.camera.right())) else { return };
+        let world_per_point = 1.0 / at.distance(side).max(1e-6);
+        let radius = 34.0 * world_per_point;
+        let (u, v) = n.any_orthonormal_pair();
+        let lift = n * radius * 0.02;
+        let disc: Vec<Pos2> = (0..48)
+            .filter_map(|k| {
+                let t = k as f32 / 48.0 * TAU;
+                project(p + lift + (u * t.cos() + v * t.sin()) * radius)
+            })
+            .collect();
+        if disc.len() == 48 {
+            painter.add(egui::Shape::convex_polygon(disc.clone(), theme::ACCENT.gamma_multiply(0.35), Stroke::NONE));
+            let mut ring = disc;
+            ring.push(ring[0]);
+            painter.add(egui::Shape::line(ring.clone(), Stroke::new(4.0, shadow)));
+            painter.add(egui::Shape::line(ring, Stroke::new(2.0, theme::ACCENT)));
+        }
+        // An arrow pressing on the face: this side goes down.
+        if let Some(tail) = project(p + n * radius * 1.8) {
+            let dir = (at - tail).normalized();
+            let tip = at - dir * 4.0;
+            painter.line_segment([tail, tip], Stroke::new(4.5, shadow));
+            painter.line_segment([tail, tip], Stroke::new(2.2, theme::ACCENT));
+            let side = vec2(-dir.y, dir.x);
+            painter.add(egui::Shape::convex_polygon(vec![tip, tip - dir * 10.0 - side * 5.5, tip - dir * 10.0 + side * 5.5], theme::ACCENT, Stroke::new(1.0, shadow)));
+        }
+        painter.circle(at, 3.5, theme::ACCENT, Stroke::new(1.5, shadow));
+        let label = painter.layout_no_wrap(tr("This face goes on the bed").to_string(), theme::mono(11.0), theme::TEXT);
+        let chip = Rect::from_min_size(at + vec2(18.0, 14.0), label.size() + vec2(16.0, 10.0));
+        painter.rect_filled(chip, CornerRadius::same(theme::RADIUS), Color32::from_black_alpha(215));
+        painter.galley(chip.min + vec2(8.0, 5.0), label, theme::TEXT);
+    }
+
     pub(super) fn draw_transform_gizmo(&self, ui: &Ui, viewport: Rect) {
-        if self.tool != Tool::Move || !self.settings.show_overlays || self.lay_face_armed {
+        if self.tool != Tool::Move || !self.settings.show_overlays {
+            return;
+        }
+        if self.lay_face_armed {
+            self.draw_lay_preview(ui, viewport);
             return;
         }
         let Some(geo) = self.gizmo_geometry(viewport) else { return };
@@ -395,6 +473,10 @@ impl ViewerApp {
         }
         if self.lay_face_armed && pressed(Modifiers::NONE, Key::Escape) {
             self.lay_face_armed = false;
+        }
+        if !self.lay_face_armed {
+            self.lay_hover = None;
+            self.lay_hover_px = None;
         }
         if pressed(Modifiers::SHIFT, Key::L) {
             self.auto_orient(ctx);

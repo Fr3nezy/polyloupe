@@ -216,6 +216,8 @@ fn italian_text(en: &str) -> Option<&'static str> {
         }
         "Model colors" => "Colori del modello",
         "Filament" => "Filamento",
+        "Click the face that goes on the bed · Esc to cancel" => "Clicca la faccia da appoggiare sul piano · Esc per annullare",
+        "This face goes on the bed" => "Questa faccia va sul piano",
         "Pick the workspace from the file type" => "Scegli l'area di lavoro dal tipo di file",
         "STL, 3MF, STEP and PLY open in Manufacturing, the other formats in 3D Art. Off: the workspace you chose last" => {
             "STL, 3MF, STEP e PLY si aprono in Manifattura, gli altri formati in 3D Art. Disattivata: l'ultima area scelta"

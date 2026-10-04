@@ -84,55 +84,6 @@ impl SnapMesh {
         Some(self.inverse.transpose().transform_vector3(n).normalize())
     }
 
-    /// The side to lay the object on for printing: the world direction whose flat faces on the
-    /// bed add up to the largest area. Faces count only when they lie on the object's outermost
-    /// plane along that direction, so a face inside a recess never wins.
-    pub fn best_down_direction(&self) -> Option<Vec3> {
-        use std::collections::HashMap;
-        let tris: Vec<(Vec3, f32, Vec3)> = self
-            .triangles()
-            .map(|t| t.map(|p| self.model.transform_point3(p)))
-            .filter_map(|[a, b, c]| {
-                let n = (b - a).cross(c - a);
-                let area = n.length() * 0.5;
-                (area > 0.0).then(|| (n / (area * 2.0), area, a))
-            })
-            .collect();
-        // Normals quantized to about one degree, ranked by total area.
-        let key = |n: Vec3| (n * 64.0).round().as_ivec3();
-        let mut by_dir: HashMap<glam::IVec3, (Vec3, f32)> = HashMap::new();
-        for &(n, area, _) in &tris {
-            let e = by_dir.entry(key(n)).or_insert((Vec3::ZERO, 0.0));
-            e.0 += n * area;
-            e.1 += area;
-        }
-        let mut candidates: Vec<(Vec3, f32)> = by_dir.into_values().map(|(n, a)| (n.normalize_or_zero(), a)).collect();
-        candidates.sort_by(|a, b| b.1.total_cmp(&a.1));
-        candidates.truncate(24);
-        let world: Vec<Vec3> = self.positions.iter().map(|&p| self.model.transform_point3(p)).collect();
-        let mut best: Option<(f32, Vec3)> = None;
-        for (dir, _) in candidates {
-            if dir == Vec3::ZERO {
-                continue;
-            }
-            // Outermost plane along `dir`: the bed once `dir` points down.
-            let (lo, hi) = world.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), p| {
-                let d = p.dot(dir);
-                (lo.min(d), hi.max(d))
-            });
-            let tolerance = (hi - lo).max(1e-6) * 1e-3;
-            let contact: f32 = tris
-                .iter()
-                .filter(|(n, _, p)| n.dot(dir) > 0.999 && (hi - p.dot(dir)) <= tolerance)
-                .map(|(_, a, _)| a)
-                .sum();
-            if best.is_none_or(|(ba, _)| contact > ba) {
-                best = Some((contact, dir));
-            }
-        }
-        best.filter(|(a, _)| *a > 0.0).map(|(_, d)| d)
-    }
-
     /// The vertex within `radius` pixels of `cursor` (viewport pixels, y down), near `hit`.
     pub fn nearest(&self, hit: Vec3, cursor: Vec2, view_proj: Mat4, size: Vec2, radius: f32) -> Option<Vec3> {
         let to_px = |w: Vec3| {
@@ -166,6 +117,55 @@ impl SnapMesh {
         }
         best.map(|(_, w)| w)
     }
+}
+
+/// The side to lay `meshes` on for printing, as one rigid group: the world direction whose flat
+/// faces on the bed add up to the largest area. Faces count only when they lie on the group's
+/// outermost plane along that direction, so a face inside a recess never wins.
+pub fn best_down_direction(meshes: &[&SnapMesh]) -> Option<Vec3> {
+    use std::collections::HashMap;
+    let tris: Vec<(Vec3, f32, Vec3)> = meshes
+        .iter()
+        .flat_map(|m| m.triangles().map(|t| t.map(|p| m.model.transform_point3(p))))
+        .filter_map(|[a, b, c]| {
+            let n = (b - a).cross(c - a);
+            let area = n.length() * 0.5;
+            (area > 0.0).then(|| (n / (area * 2.0), area, a))
+        })
+        .collect();
+    // Normals quantized to about one degree, ranked by total area.
+    let key = |n: Vec3| (n * 64.0).round().as_ivec3();
+    let mut by_dir: HashMap<glam::IVec3, (Vec3, f32)> = HashMap::new();
+    for &(n, area, _) in &tris {
+        let e = by_dir.entry(key(n)).or_insert((Vec3::ZERO, 0.0));
+        e.0 += n * area;
+        e.1 += area;
+    }
+    let mut candidates: Vec<(Vec3, f32)> = by_dir.into_values().map(|(n, a)| (n.normalize_or_zero(), a)).collect();
+    candidates.sort_by(|a, b| b.1.total_cmp(&a.1));
+    candidates.truncate(24);
+    let world: Vec<Vec3> = meshes.iter().flat_map(|m| m.positions.iter().map(|&p| m.model.transform_point3(p))).collect();
+    let mut best: Option<(f32, Vec3)> = None;
+    for (dir, _) in candidates {
+        if dir == Vec3::ZERO {
+            continue;
+        }
+        // Outermost plane along `dir`: the bed once `dir` points down.
+        let (lo, hi) = world.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), p| {
+            let d = p.dot(dir);
+            (lo.min(d), hi.max(d))
+        });
+        let tolerance = (hi - lo).max(1e-6) * 1e-3;
+        let contact: f32 = tris
+            .iter()
+            .filter(|(n, _, p)| n.dot(dir) > 0.999 && (hi - p.dot(dir)) <= tolerance)
+            .map(|(_, a, _)| a)
+            .sum();
+        if best.is_none_or(|(ba, _)| contact > ba) {
+            best = Some((contact, dir));
+        }
+    }
+    best.filter(|(a, _)| *a > 0.0).map(|(_, d)| d)
 }
 
 /// Distance from `p` to the triangle `abc` (Ericson, Real-Time Collision Detection, 5.1.5).
@@ -244,7 +244,7 @@ mod tests {
         let tilt = Mat4::from_rotation_x(0.3);
         let mut mesh = SnapMesh::new(Mat4::IDENTITY, positions, indices);
         mesh.place(tilt);
-        let down = mesh.best_down_direction().expect("a side");
+        let down = best_down_direction(&[&mesh]).expect("a side");
         let big = tilt.transform_vector3(Vec3::Z);
         assert!(down.dot(big).abs() > 0.999, "{down}");
         // Clicking the -Z face reports its outward normal.

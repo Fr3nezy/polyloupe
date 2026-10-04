@@ -54,6 +54,8 @@ pub struct CaptureOptions {
     pub rotate: Option<[f32; 3]>,
     pub auto_orient: bool,
     pub export_model: Option<PathBuf>,
+    /// Lay on face, choosing: the cursor at these viewport pixels.
+    pub lay_hover: Option<[u32; 2]>,
     settings: Vec<(String, Option<String>)>,
 }
 
@@ -185,6 +187,11 @@ pub fn parse() -> Result<LaunchOptions, String> {
                 capture.rotate = Some([x, y, z]);
             }
             "--auto-orient" => capture.auto_orient = true,
+            "--lay" => {
+                let v = value("--lay")?;
+                let (x, y) = v.split_once(',').ok_or("--lay expects X,Y")?;
+                capture.lay_hover = Some([x.parse().map_err(|_| "bad --lay x")?, y.parse().map_err(|_| "bad --lay y")?]);
+            }
             "--export-model" => {
                 capture.export_model = Some(PathBuf::from(value("--export-model")?));
                 capturing = true;
