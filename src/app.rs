@@ -1169,13 +1169,21 @@ impl ViewerApp {
         if self.info.is_some() && pressed(Modifiers::NONE, Key::U) {
             self.uv_view.open = !self.uv_view.open;
         }
-        // Measure: Esc drops the point being placed, Delete clears every measurement.
+        // Measure: Esc drops the point being placed, Delete (or Ctrl+Z) removes the last
+        // measurement, Shift+Delete clears them all.
         if self.measure_start.is_some() && pressed(Modifiers::NONE, Key::Escape) {
             self.cancel_measure();
         }
-        if !self.measures.is_empty() && (pressed(Modifiers::NONE, Key::Delete) || pressed(Modifiers::NONE, Key::Backspace)) {
-            self.measures.clear();
-            self.cancel_measure();
+        if !self.measures.is_empty() {
+            if pressed(Modifiers::SHIFT, Key::Delete) || pressed(Modifiers::SHIFT, Key::Backspace) {
+                self.measures.clear();
+                self.cancel_measure();
+            } else if pressed(Modifiers::NONE, Key::Delete)
+                || pressed(Modifiers::NONE, Key::Backspace)
+                || pressed(Modifiers::COMMAND, Key::Z)
+            {
+                self.measures.pop();
+            }
         }
         if pressed(Modifiers::SHIFT, Key::C) {
             self.cycle_channel(false);

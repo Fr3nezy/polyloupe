@@ -1398,7 +1398,8 @@ impl ViewerApp {
                     widgets::hint(ui, &["Esc"], "Cancel point");
                 }
                 if !self.measures.is_empty() {
-                    widgets::hint(ui, &["Del"], "Clear measurements");
+                    widgets::hint(ui, &["Del"], "Remove last");
+                    widgets::hint(ui, &["Shift", "Del"], "Clear all");
                 }
                 widgets::hint(ui, &["Ctrl"], "No vertex snap");
                 widgets::hint(ui, &["Q"], "Back to select");
