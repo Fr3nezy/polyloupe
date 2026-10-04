@@ -9,6 +9,7 @@ license = "GPL-3.0-or-later"
 base64 = "0.23.1"
 glam = "0.33.10"
 gltf = { version = "1.4.1", features = ["KHR_texture_transform"] }
+libloading = "0.8"
 image = { version = "0.25", default-features = false, features = ["bmp", "exr", "gif", "hdr", "jpeg", "png", "tga", "webp"] }
 log = "0.4.34"
 mikktspace = "0.3.0"

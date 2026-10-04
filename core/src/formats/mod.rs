@@ -2,4 +2,5 @@
 
 pub mod collada;
 pub mod ply;
+pub mod step;
 pub mod threemf;

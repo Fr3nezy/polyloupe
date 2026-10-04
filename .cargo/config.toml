@@ -2,3 +2,8 @@
 # DLLs that ship with Windows, so they run on machines without the Visual C++ Redistributable.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
+
+# OpenCASCADE for the STEP reader (step/): cadrum builds it from source once into this folder,
+# and step/build.rs compiles against the same headers.
+[env]
+OCCT_ROOT = { value = "target/occt", relative = true }

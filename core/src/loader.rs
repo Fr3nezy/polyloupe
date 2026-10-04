@@ -12,7 +12,7 @@ use crate::scene::{
     MeshData, MeshRig, MorphTarget, Node, Property, Scene, Skin, unique_edges, y_up_to_z_up,
 };
 
-pub const SUPPORTED_EXTENSIONS: &[&str] = &["glb", "gltf", "fbx", "obj", "stl", "ply", "3mf", "dae"];
+pub const SUPPORTED_EXTENSIONS: &[&str] = &["glb", "gltf", "fbx", "obj", "stl", "ply", "3mf", "dae", "step", "stp"];
 pub const ENVIRONMENT_EXTENSIONS: &[&str] = &["hdr", "exr"];
 
 pub fn is_supported(path: &Path) -> bool {
@@ -43,6 +43,7 @@ pub fn load_with(path: &Path, texture_dirs: &[PathBuf]) -> Result<Scene, String>
         Some("ply") => crate::formats::ply::load(path),
         Some("3mf") => crate::formats::threemf::load(path),
         Some("dae") => crate::formats::collada::load(path, texture_dirs),
+        Some("step" | "stp") => crate::formats::step::load(path),
         Some(other) => Err(format!(".{other} files aren't supported yet")),
         None => Err("The file has no extension, so its format is unknown".into()),
     }?;
