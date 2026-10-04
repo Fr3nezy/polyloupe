@@ -59,6 +59,8 @@ struct GlobalsUniform {
     section: [f32; 4],
     normals: [f32; 4],
     display: [f32; 4],
+    finish: [f32; 4],
+    finish_color: [f32; 4],
 }
 
 /// One mesh analysis marker (see `qa`): an edge from `a` to `b`, or a vertex at `a`.
@@ -147,6 +149,9 @@ pub struct FrameInput<'a> {
     pub section: Option<[f32; 4]>,
     /// Length of the normal lines in world units (when the overlay is on).
     pub normal_length: f32,
+    /// World units per millimeter when the print finish applies (Manufacturing workspace),
+    /// 0 otherwise.
+    pub print_scale: f32,
 }
 
 struct GpuMesh {
@@ -1049,6 +1054,20 @@ impl Renderer {
             section: input.section.unwrap_or([0.0; 4]),
             normals: [if s.show_normals { input.normal_length } else { 0.0 }, s.show_face_orientation as u32 as f32, 0.0, 0.0],
             display: [(s.up_axis == crate::axes::UpAxis::Y) as u32 as f32, 0.0, 0.0, 0.0],
+            finish: if rendered && input.print_scale > 0.0 {
+                [
+                    s.finish.shader_id() as f32,
+                    s.layer_height.max(0.01) * input.print_scale,
+                    s.finish_model_colors as u32 as f32,
+                    input.print_scale,
+                ]
+            } else {
+                [0.0; 4]
+            },
+            finish_color: {
+                let c = srgb_to_linear(s.filament_color);
+                [c[0], c[1], c[2], 1.0]
+            },
         };
         self.queue.write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
 

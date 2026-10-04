@@ -383,7 +383,7 @@ impl ViewerApp {
 
     /// Shortcuts that only apply with the Move tool.
     pub(super) fn transform_shortcuts(&mut self, ctx: &egui::Context) {
-        if self.tool != Tool::Move || self.info.is_none() {
+        if self.tool != Tool::Move || self.info.is_none() || !self.manufacturing() {
             return;
         }
         let pressed = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
@@ -407,7 +407,7 @@ impl ViewerApp {
 
     /// Move tool options, docked at the bottom of the viewport.
     pub(super) fn transform_bar(&mut self, ctx: &egui::Context, viewport: Rect) {
-        if self.tool != Tool::Move || self.info.is_none() {
+        if self.tool != Tool::Move || self.info.is_none() || !self.manufacturing() {
             return;
         }
         let targets = self.transform_targets();
@@ -463,18 +463,8 @@ impl ViewerApp {
         }
     }
 
-    /// A length for the Move tool: millimeters for files without units (STL, 3MF and STEP are
-    /// millimeters by convention), otherwise meters like the rest of the UI.
     pub(super) fn fmt_model_len(&self, v: f32) -> String {
-        match self.info.as_ref().map(|i| i.units) {
-            Some(crate::scene::Units::Undeclared) => {
-                let text = format!("{v:.2}");
-                let text = text.trim_end_matches('0').trim_end_matches('.');
-                let text = if text == "-0" { "0" } else { text };
-                format!("{text} mm")
-            }
-            _ => fmt_len(v),
-        }
+        fmt_len(v)
     }
 
     // --- Export --------------------------------------------------------------------------------

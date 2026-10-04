@@ -13,7 +13,7 @@ use super::{theme, widgets};
 use crate::loader::{self, EnvImage};
 use crate::render::{environment, matcap};
 use crate::settings::{
-    ColorMode, Environment, Lighting, Settings, ShadingMode, TexturePass, ViewTransform,
+    ColorMode, Environment, Finish, Lighting, Settings, ShadingMode, TexturePass, ViewTransform,
 };
 
 const ENV_THUMB: [u32; 2] = [128, 64];
@@ -126,9 +126,15 @@ pub fn overlays(ui: &mut Ui, s: &mut Settings) {
         .on_hover_text(tr("Redraws continuously and shows FPS in the status bar"));
 }
 
-pub fn shading(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails) -> Option<PopoverAction> {
+/// `manufacturing`: the Manufacturing workspace, which adds the print finish to Rendered.
+pub fn shading(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails, manufacturing: bool) -> Option<PopoverAction> {
     ui.set_min_width(270.0);
     let mut action = None;
+    if manufacturing && s.shading == ShadingMode::Rendered {
+        print_finish(ui, s);
+        ui.add_space(4.0);
+        ui.separator();
+    }
     match s.shading {
         ShadingMode::Solid => solid(ui, s, thumbs),
         ShadingMode::Wireframe => {
@@ -156,6 +162,32 @@ pub fn shading(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails) -> Option
         ui.checkbox(&mut s.backface_culling, tr("Backface culling"));
     }
     action
+}
+
+/// Print finish for quick renders of a part: material, layer height, filament color.
+fn print_finish(ui: &mut Ui, s: &mut Settings) {
+    widgets::section(ui, "Print Finish");
+    for row in Finish::ALL.chunks(4) {
+        ui.horizontal(|ui| {
+            let options: Vec<(Finish, &str)> = row.iter().map(|f| (*f, f.label())).collect();
+            if widgets::segmented(ui, &mut s.finish, &options) {
+                s.layer_height = s.finish.layer_height();
+            }
+        });
+    }
+    ui.label(RichText::new(tr(s.finish.description())).size(11.0).color(theme::TEXT_DIM));
+    if s.finish == Finish::Off {
+        return;
+    }
+    ui.add(egui::Slider::new(&mut s.layer_height, 0.02..=0.6).step_by(0.01).suffix(" mm").text(tr("Layer height")))
+        .on_hover_text(tr("Layer lines run along Z: lay the part on a face to change the print direction"));
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut s.finish_model_colors, tr("Model colors"));
+        ui.add_enabled_ui(!s.finish_model_colors, |ui| {
+            ui.color_edit_button_srgb(&mut s.filament_color);
+            ui.label(RichText::new(tr("Filament")).color(theme::TEXT_DIM));
+        });
+    });
 }
 
 /// Checkbox with the marker color as a swatch after the label.

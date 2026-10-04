@@ -179,11 +179,91 @@ fn ibl(n: vec3<f32>, v: vec3<f32>, base: vec3<f32>, metallic: f32, rough: f32) -
     return (kd * base * irr + spec * (f0 * lut.x + lut.y)) * g.env.x;
 }
 
+// --- Print finishes (Manufacturing workspace) ---
+// Procedural and in world space, so they need no UVs: FDM layer lines run along world Z, the
+// bed's normal, and follow the part when it's laid on another face.
+
+struct Finish {
+    n: vec3<f32>,
+    albedo: vec3<f32>,
+    metallic: f32,
+    rough: f32,
+    ao: f32,
+};
+
+fn hash13(p: vec3<f32>) -> f32 {
+    var q = fract(p * 0.1031);
+    q += dot(q, q.zyx + 31.32);
+    return fract((q.x + q.y) * q.z);
+}
+
+fn noise3(p: vec3<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = mix(hash13(i), hash13(i + vec3<f32>(1.0, 0.0, 0.0)), u.x);
+    let b = mix(hash13(i + vec3<f32>(0.0, 1.0, 0.0)), hash13(i + vec3<f32>(1.0, 1.0, 0.0)), u.x);
+    let c = mix(hash13(i + vec3<f32>(0.0, 0.0, 1.0)), hash13(i + vec3<f32>(1.0, 0.0, 1.0)), u.x);
+    let d = mix(hash13(i + vec3<f32>(0.0, 1.0, 1.0)), hash13(i + vec3<f32>(1.0, 1.0, 1.0)), u.x);
+    return mix(mix(a, b, u.y), mix(c, d, u.y), u.z);
+}
+
+// `pos_fw`: fwidth of the world position, taken where control flow is still uniform.
+fn print_finish(p: vec3<f32>, pos_fw: vec3<f32>, n_in: vec3<f32>, model: vec3<f32>) -> Finish {
+    var out: Finish;
+    out.albedo = select(g.finish_color.rgb, model, g.finish.z > 0.5);
+    out.metallic = 0.0;
+    out.rough = 0.5;
+    out.ao = 1.0;
+    // Strength of the layer lines and of the powder grain, grain size in millimeters.
+    var lines = 0.0;
+    var grain = 0.0;
+    var grain_mm = 0.05;
+    switch u32(g.finish.x + 0.5) {
+        case 1u: { out.rough = 0.62; lines = 0.55; }
+        case 2u: { out.rough = 0.18; lines = 0.5; }
+        case 3u: { out.rough = 0.3; out.metallic = 0.55; lines = 0.35; }
+        case 4u: { out.rough = 0.32; lines = 0.12; }
+        case 5u: { out.rough = 0.92; lines = 0.05; grain = 0.4; grain_mm = 0.06; }
+        case 6u: { out.rough = 0.45; out.metallic = 1.0; lines = 0.08; grain = 0.28; grain_mm = 0.04; }
+        default: {}
+    }
+    var n = n_in;
+    // Walls show the layers; flat tops and bottoms don't.
+    let side = sqrt(max(1.0 - n_in.z * n_in.z, 0.0));
+    let t = p.z / g.finish.y;
+    // Layers thinner than a pixel fade out instead of shimmering.
+    let fade = 1.0 - smoothstep(0.3, 0.8, pos_fw.z / g.finish.y);
+    if lines > 0.0 && fade > 0.0 && side > 0.0 {
+        // Each layer is a rounded bead: its normal tilts up above the bead's middle and down
+        // below it, with a crease where two layers meet.
+        let f = fract(t) - 0.5;
+        let up = normalize(vec3<f32>(0.0, 0.0, 1.0) - n_in * n_in.z);
+        n = normalize(n + up * (2.0 * f * lines * fade * side));
+        out.ao *= 1.0 - 0.35 * pow(abs(f) * 2.0, 6.0) * side * fade * lines;
+        // Extrusion varies a little from layer to layer.
+        out.albedo *= 1.0 + (hash13(vec3<f32>(floor(t), 7.0, 3.0)) - 0.5) * 0.06 * fade * min(lines * 2.0, 1.0);
+    }
+    if grain > 0.0 {
+        let scale = 1.0 / (grain_mm * g.finish.w);
+        let q = p * scale;
+        let gfade = 1.0 - smoothstep(0.5, 1.5, length(pos_fw) * scale);
+        if gfade > 0.0 {
+            let gn = vec3<f32>(noise3(q), noise3(q + vec3<f32>(17.3)), noise3(q + vec3<f32>(41.7))) - vec3<f32>(0.5);
+            n = normalize(n + gn * grain * gfade);
+            out.albedo *= 1.0 + (noise3(q * 0.5 + vec3<f32>(3.1)) - 0.5) * 0.12 * gfade;
+        }
+    }
+    out.n = n;
+    return out;
+}
+
 @fragment
 fn fs_mesh(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     // Explicit gradients keep texture sampling legal after the non-uniform branches below.
     let dx = dpdx(in.uv);
     let dy = dpdy(in.uv);
+    let pos_fw = fwidth(in.world_pos);
 
     if section_cuts(in.world_pos) {
         discard;
@@ -277,7 +357,16 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         }
     } else if mode == 2u {
         let v = view_dir(in.world_pos);
-        color = ibl(n, v, base.rgb, clamp(metallic, 0.0, 1.0), clamp(rough, 0.03, 1.0)) * ao + emissive;
+        var albedo = base.rgb;
+        if g.finish.x > 0.5 {
+            let f = print_finish(in.world_pos, pos_fw, n, base.rgb);
+            n = f.n;
+            albedo = f.albedo;
+            metallic = f.metallic;
+            rough = f.rough;
+            ao *= f.ao;
+        }
+        color = ibl(n, v, albedo, clamp(metallic, 0.0, 1.0), clamp(rough, 0.03, 1.0)) * ao + emissive;
         color = view_transform(color * g.params.y, g.extra.y);
     } else if cmode == 4u {
         let c = select(vec3<f32>(0.8), in.color.rgb, has(HAS_COLOR));

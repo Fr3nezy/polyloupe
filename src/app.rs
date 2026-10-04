@@ -33,7 +33,7 @@ use crate::render::{self, FrameInput, Renderer, environment};
 use crate::qa;
 use crate::snap;
 use crate::scene::{Aabb, MapRef, Scene};
-use crate::settings::{ColorMode, Environment, Settings, ShadingMode, TexturePass};
+use crate::settings::{ColorMode, Environment, Settings, ShadingMode, TexturePass, Workspace};
 use crate::ui::gizmo::{self, GizmoAction};
 use crate::ui::pie::{PieChoice, PieMenu};
 use crate::ui::popovers::{self, ChannelAction, PopoverAction, Thumbnails};
@@ -237,6 +237,8 @@ struct Toast {
 
 pub struct ViewerApp {
     settings: Settings,
+    /// Manufacturing or 3D Art tools for the model on screen (see `Workspace`).
+    workspace: Workspace,
     /// Where the viewport toolbar was last drawn: the HUD chips, gizmo and channel strip move
     /// below it when the viewport is too narrow for them to share the top edge.
     toolbar_rect: Rect,
@@ -378,6 +380,7 @@ impl ViewerApp {
             measure_hover: None,
             measure_hover_px: None,
             section: None,
+            workspace: Workspace::Art,
             user_transforms: Vec::new(),
             transform_undo: Vec::new(),
             transform_drag: None,
@@ -406,6 +409,7 @@ impl ViewerApp {
             snap_on_release: false,
             reveal: Reveal::Done,
         };
+        app.workspace = app.settings.workspace;
         if RESTORE_MAXIMIZED.load(Ordering::Relaxed) && crate::cloak::set_cloaked(cc, true) {
             app.reveal = Reveal::Cloaked { painted: false, frames: 0 };
         }
@@ -551,6 +555,7 @@ impl ViewerApp {
     fn render_offscreen(&mut self, size: [u32; 2], transparent: bool) -> Option<([u32; 2], Vec<u8>)> {
         let section = self.section_plane();
         let normal_length = self.normal_length();
+        let print_scale = self.print_scale();
         let renderer = self.renderer.as_mut()?;
         let mut settings = self.settings.clone();
         settings.show_grid = settings.show_overlays && settings.export_grid;
@@ -581,6 +586,7 @@ impl ViewerApp {
             transparent,
             section,
             normal_length,
+            print_scale,
         };
         renderer.render(None, size, &input);
         renderer.read_pixels()
@@ -629,6 +635,9 @@ impl ViewerApp {
                             ui.selectable_value(&mut s.language, lang, lang.label());
                         }
                     });
+                ui.checkbox(&mut s.auto_workspace, tr("Pick the workspace from the file type")).on_hover_text(tr(
+                    "STL, 3MF, STEP and PLY open in Manufacturing, the other formats in 3D Art. Off: the workspace you chose last",
+                ));
                 ui.add_space(6.0);
                 widgets::section(ui, "Rendered");
                 let env_name = |e: &Environment| match e {
@@ -772,6 +781,9 @@ impl ViewerApp {
             }
         }
         let file_name = file_name(path);
+        if self.settings.auto_workspace {
+            self.workspace = Workspace::for_path(path);
+        }
         self.camera.reset(&scene.bounds);
         let info = scene_info(&scene, path, started.elapsed());
         let n = info.objects.len();
@@ -790,6 +802,7 @@ impl ViewerApp {
         self.pass_override = vec![None; n];
         let missing_count = info.missing.len();
         self.info = Some(info);
+        self.apply_workspace();
         self.settings.push_recent(&path.to_string_lossy());
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{file_name} — {APP_NAME}")));
         // Missing textures get a banner with a fix; other warnings a plain toast.
@@ -823,6 +836,44 @@ impl ViewerApp {
                 (v, true)
             }
             None => (hit, false),
+        }
+    }
+
+    pub(super) fn manufacturing(&self) -> bool {
+        self.workspace == Workspace::Manufacturing
+    }
+
+    /// Switches workspace for the model on screen; the choice is also the one used when
+    /// "pick from the file type" is off.
+    pub(super) fn set_workspace(&mut self, workspace: Workspace) {
+        self.workspace = workspace;
+        self.settings.workspace = workspace;
+        self.apply_workspace();
+    }
+
+    /// Lengths and tools for the current workspace. Manufacturing shows millimeters, and reads
+    /// files without units (STL, STEP) as millimeters too; 3D Art keeps Blender's meters.
+    fn apply_workspace(&mut self) {
+        let undeclared = self.info.as_ref().is_some_and(|i| i.units == crate::scene::Units::Undeclared);
+        let manufacturing = self.manufacturing();
+        set_length_units(if manufacturing && undeclared { 0.001 } else { 1.0 }, manufacturing);
+        if manufacturing {
+            self.uv_view.open = false;
+            self.pass_override.fill(None);
+            if self.settings.color == ColorMode::Texture {
+                self.settings.color = ColorMode::Material;
+            }
+        } else if self.tool == Tool::Move {
+            self.tool = Tool::Select;
+        }
+    }
+
+    /// World units per millimeter for the print finish, 0 when it doesn't apply.
+    pub(super) fn print_scale(&self) -> f32 {
+        match self.info.as_ref().map(|i| i.units) {
+            _ if !self.manufacturing() => 0.0,
+            Some(crate::scene::Units::Undeclared) => 1.0,
+            _ => 0.001,
         }
     }
 
@@ -1152,7 +1203,7 @@ impl ViewerApp {
         let pressed = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
         self.transform_shortcuts(ctx);
         for (key, tool) in [(Key::Q, Tool::Select), (Key::O, Tool::Orbit), (Key::G, Tool::Pan), (Key::M, Tool::Measure), (Key::W, Tool::Move)] {
-            if pressed(Modifiers::NONE, key) {
+            if pressed(Modifiers::NONE, key) && (tool != Tool::Move || self.manufacturing()) {
                 self.tool = tool;
             }
         }
@@ -1191,7 +1242,7 @@ impl ViewerApp {
         if pressed(Modifiers::NONE, Key::C) {
             self.cycle_channel(true);
         }
-        if self.info.is_some() && pressed(Modifiers::NONE, Key::U) {
+        if self.info.is_some() && !self.manufacturing() && pressed(Modifiers::NONE, Key::U) {
             self.uv_view.open = !self.uv_view.open;
         }
         // Measure: Esc drops the point being placed, Delete (or Ctrl+Z) removes the last
@@ -1448,7 +1499,7 @@ impl ViewerApp {
                 self.hud(ui, rect);
             }
             let gizmo_shown = overlays && self.settings.show_gizmo;
-            if self.loading.is_none() {
+            if self.loading.is_none() && !self.manufacturing() {
                 self.channel_strip(&ctx, rect, gizmo_shown);
             }
             if gizmo_shown {
@@ -1501,6 +1552,7 @@ impl ViewerApp {
         let section = self.section_plane();
         let normal_length = self.normal_length();
         let effective = self.effective_settings();
+        let print_scale = self.print_scale();
         let (Some(renderer), Some(rs)) = (&mut self.renderer, frame.wgpu_render_state()) else {
             ui.painter().rect_filled(rect, 0.0, theme::VIEWPORT);
             return;
@@ -1537,6 +1589,7 @@ impl ViewerApp {
             transparent: false,
             section,
             normal_length,
+            print_scale,
         };
         let texture = {
             let mut egui_renderer = rs.renderer.write();
@@ -1956,8 +2009,32 @@ fn file_name(path: &Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
-/// Formats a length in meters (1 unit = 1 m, like Blender) with a readable unit.
-fn fmt_len(m: f32) -> String {
+/// Meters per world unit (bits of an f32) and whether lengths always show in millimeters:
+/// set per model by `apply_workspace`.
+static METERS_PER_UNIT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3f80_0000);
+static PREFER_MM: AtomicBool = AtomicBool::new(false);
+
+fn set_length_units(meters_per_unit: f32, millimeters: bool) {
+    METERS_PER_UNIT.store(meters_per_unit.to_bits(), Ordering::Relaxed);
+    PREFER_MM.store(millimeters, Ordering::Relaxed);
+}
+
+fn meters_per_unit() -> f32 {
+    f32::from_bits(METERS_PER_UNIT.load(Ordering::Relaxed))
+}
+
+/// Formats a length in world units (1 unit = 1 m like Blender, or 1 mm for unitless files in
+/// the Manufacturing workspace) with a readable unit; millimeters in Manufacturing.
+fn fmt_len(units: f32) -> String {
+    let m = units * meters_per_unit();
+    if PREFER_MM.load(Ordering::Relaxed) {
+        let mm = m * 1000.0;
+        let decimals = if mm.abs() >= 100.0 { 1 } else { 2 };
+        let text = format!("{mm:.decimals$}");
+        let text = if text.contains('.') { text.trim_end_matches('0').trim_end_matches('.').to_string() } else { text };
+        let text = if text == "-0" { "0".to_string() } else { text };
+        return format!("{text} mm");
+    }
     let a = m.abs();
     let (value, unit) = if a >= 1000.0 {
         (m / 1000.0, "km")

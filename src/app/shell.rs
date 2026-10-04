@@ -109,6 +109,18 @@ impl ViewerApp {
                 if window_button(ui, icons::window_minimize, size, false).clicked() {
                     ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
                 }
+                ui.add_space(12.0);
+                let mut workspace = self.workspace;
+                let tip = tr("Manufacturing: CAD and 3D printing tools, millimeters · 3D Art: textures, UVs, animation");
+                // The segmented control fills the width it gets: give it a fixed one.
+                let options = [(Workspace::Manufacturing, Workspace::Manufacturing.label()), (Workspace::Art, Workspace::Art.label())];
+                ui.allocate_ui_with_layout(vec2(230.0, theme::CONTROL_HEIGHT), Layout::left_to_right(Align::Center), |ui| {
+                    if widgets::segmented(ui, &mut workspace, &options) {
+                        self.set_workspace(workspace);
+                    }
+                })
+                .response
+                .on_hover_text(tip);
             });
         });
     }
@@ -188,7 +200,9 @@ impl ViewerApp {
                         ui.close();
                         self.show_turntable = true;
                     }
-                    if ui.button(tr("Export Model…")).on_hover_text(tr("Save the model as STL or 3MF, with the Move tool's changes")).clicked() {
+                    if self.manufacturing()
+                        && ui.button(tr("Export Model…")).on_hover_text(tr("Save the model as STL or 3MF, with the Move tool's changes")).clicked()
+                    {
                         ui.close();
                         self.export_model_dialog(&ctx);
                     }
@@ -339,6 +353,9 @@ impl ViewerApp {
                 (Tool::Measure, icons::ruler, "Measure (M)"),
                 (Tool::Section, icons::section, "Section"),
             ] {
+                if tool == Tool::Move && !self.manufacturing() {
+                    continue;
+                }
                 if tool_button(ui, icon, self.tool == tool).on_hover_text(tr(tip)).clicked() {
                     self.tool = tool;
                     if tool == Tool::Section && self.section.is_none() {
@@ -435,7 +452,7 @@ impl ViewerApp {
                     }
                     if self.info.is_some() {
                         toolbar_separator(ui);
-                        if text_button(ui, "UV", self.uv_view.open).on_hover_text(tr("UV layout (U)")).clicked() {
+                        if !self.manufacturing() && text_button(ui, "UV", self.uv_view.open).on_hover_text(tr("UV layout (U)")).clicked() {
                             self.uv_view.open = !self.uv_view.open;
                         }
                         compare_action = self.compare_toolbar(ui);
@@ -947,7 +964,8 @@ impl ViewerApp {
         ui.add_space(6.0);
         ui.painter().hline(ui.max_rect().x_range(), ui.cursor().top(), Stroke::new(1.0, theme::BORDER));
         ui.add_space(6.0);
-        let action = popovers::shading(ui, &mut self.settings, &mut self.thumbs);
+        let manufacturing = self.manufacturing();
+        let action = popovers::shading(ui, &mut self.settings, &mut self.thumbs, manufacturing);
         if let Some(a) = action {
             self.apply_popover_action(a);
         }
@@ -1046,6 +1064,7 @@ impl ViewerApp {
         let bounds = self.visible_bounds(false);
         let units = match info.units {
             crate::scene::Units::Meters => tr("Meters (glTF)").to_string(),
+            crate::scene::Units::Undeclared if self.manufacturing() => tr("Not stored (mm)").to_string(),
             crate::scene::Units::Undeclared => tr("Not stored (m)").to_string(),
             crate::scene::Units::Declared(m) => unit_name(m, &info.path),
         };
@@ -1624,7 +1643,8 @@ fn unit_name(meters: f64, path: &Path) -> String {
 
 /// A hint when the size looks like a units mix-up (the classic 100x FBX).
 fn scale_note(largest: f32, units: crate::scene::Units) -> Option<String> {
-    if !(largest > 0.0) {
+    // Manufacturing reads unitless files as millimeters already.
+    if !(largest > 0.0) || meters_per_unit() != 1.0 {
         return None;
     }
     if largest > 100.0 {

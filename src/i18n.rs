@@ -194,6 +194,32 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "PNG image" => "Immagine PNG",
         "Saved {name}" => "Salvata {name}",
         "Model saved: {name}" => "Modello salvato: {name}",
+        "Manufacturing" => "Manifattura",
+        "3D Art" => "3D Art",
+        "Manufacturing: CAD and 3D printing tools, millimeters · 3D Art: textures, UVs, animation" => {
+            "Manifattura: strumenti per CAD e stampa 3D, millimetri · 3D Art: texture, UV, animazione"
+        }
+        "Not stored (mm)" => "Non salvate (mm)",
+        "Print Finish" => "Finitura di stampa",
+        "Resin" => "Resina",
+        "Metal SLM" => "Metallo SLM",
+        "The model's own materials" => "I materiali del modello",
+        "FDM, matte, visible layer lines" => "FDM, opaco, layer visibili",
+        "FDM, glossy, visible layer lines" => "FDM, lucido, layer visibili",
+        "FDM, satin metallic sheen" => "FDM, riflesso satinato metallico",
+        "SLA/MSLA, smooth with fine layers" => "SLA/MSLA, liscio con layer sottili",
+        "Powder bed, grainy and matte" => "Letto di polvere, granuloso e opaco",
+        "Laser-sintered metal, grainy" => "Metallo sinterizzato laser, granuloso",
+        "Layer height" => "Altezza layer",
+        "Layer lines run along Z: lay the part on a face to change the print direction" => {
+            "I layer seguono l'asse Z: appoggia il pezzo su una faccia per cambiare la direzione di stampa"
+        }
+        "Model colors" => "Colori del modello",
+        "Filament" => "Filamento",
+        "Pick the workspace from the file type" => "Scegli l'area di lavoro dal tipo di file",
+        "STL, 3MF, STEP and PLY open in Manufacturing, the other formats in 3D Art. Off: the workspace you chose last" => {
+            "STL, 3MF, STEP e PLY si aprono in Manifattura, gli altri formati in 3D Art. Disattivata: l'ultima area scelta"
+        }
         "Couldn't save {name}: {error}" => "Impossibile salvare {name}: {error}",
         "Export Model…" => "Esporta modello…",
         "Export Model" => "Esporta modello",

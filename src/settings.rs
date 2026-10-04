@@ -75,6 +75,90 @@ pub enum ViewTransform {
     AgX,
 }
 
+/// Which tools the interface offers: for making physical parts (CAD, 3D printing) or for 3D
+/// art (textures, UVs, animation).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Workspace {
+    Manufacturing,
+    Art,
+}
+
+impl Workspace {
+    /// The workspace a file type usually belongs to: print and CAD formats are manufacturing,
+    /// the rest art.
+    pub fn for_path(path: &std::path::Path) -> Workspace {
+        let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+        match ext.as_deref() {
+            Some("stl" | "3mf" | "step" | "stp" | "ply") => Workspace::Manufacturing,
+            _ => Workspace::Art,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Workspace::Manufacturing => "Manufacturing",
+            Workspace::Art => "3D Art",
+        }
+    }
+}
+
+/// Procedural look of a printed part (Manufacturing workspace): layer lines, grain, and the
+/// material's sheen, projected in world space so no UVs are needed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Finish {
+    Off,
+    Pla,
+    Petg,
+    SilkPla,
+    Resin,
+    Nylon,
+    Metal,
+}
+
+impl Finish {
+    pub const ALL: [Finish; 7] = [Finish::Off, Finish::Pla, Finish::Petg, Finish::SilkPla, Finish::Resin, Finish::Nylon, Finish::Metal];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Finish::Off => "None",
+            Finish::Pla => "PLA",
+            Finish::Petg => "PETG",
+            Finish::SilkPla => "Silk PLA",
+            Finish::Resin => "Resin",
+            Finish::Nylon => "Nylon SLS",
+            Finish::Metal => "Metal SLM",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Finish::Off => "The model's own materials",
+            Finish::Pla => "FDM, matte, visible layer lines",
+            Finish::Petg => "FDM, glossy, visible layer lines",
+            Finish::SilkPla => "FDM, satin metallic sheen",
+            Finish::Resin => "SLA/MSLA, smooth with fine layers",
+            Finish::Nylon => "Powder bed, grainy and matte",
+            Finish::Metal => "Laser-sintered metal, grainy",
+        }
+    }
+
+    /// Typical layer height in millimeters.
+    pub fn layer_height(self) -> f32 {
+        match self {
+            Finish::Off => 0.0,
+            Finish::Pla | Finish::Petg | Finish::SilkPla => 0.2,
+            Finish::Resin => 0.05,
+            Finish::Nylon => 0.1,
+            Finish::Metal => 0.04,
+        }
+    }
+
+    /// Index the mesh shader switches on (0 = off).
+    pub fn shader_id(self) -> u32 {
+        Finish::ALL.iter().position(|f| *f == self).unwrap_or(0) as u32
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Environment {
     Preset(Preset),
@@ -157,6 +241,16 @@ pub struct Settings {
     pub export_grid: bool,
 
     pub recent_files: Vec<String>,
+
+    /// Pick the workspace from the file type; otherwise `workspace` always.
+    pub auto_workspace: bool,
+    pub workspace: Workspace,
+    /// Print finish (Manufacturing workspace, Rendered mode), its layer height in millimeters,
+    /// and whether it keeps the model's colors or uses `filament_color` (sRGB).
+    pub finish: Finish,
+    pub layer_height: f32,
+    pub finish_model_colors: bool,
+    pub filament_color: [u8; 3],
 }
 
 impl Default for Settings {
@@ -212,6 +306,12 @@ impl Default for Settings {
             export_transparent: false,
             export_grid: false,
             recent_files: Vec::new(),
+            auto_workspace: true,
+            workspace: Workspace::Art,
+            finish: Finish::Pla,
+            layer_height: 0.2,
+            finish_model_colors: true,
+            filament_color: [232, 232, 228],
         }
     }
 }
