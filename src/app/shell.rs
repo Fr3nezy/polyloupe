@@ -28,6 +28,8 @@ pub(super) enum Tool {
     Measure,
     /// Drag to slide the section plane.
     Section,
+    /// Gizmo to move and rotate objects, lay them on a face, export the result.
+    Move,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -186,6 +188,10 @@ impl ViewerApp {
                         ui.close();
                         self.show_turntable = true;
                     }
+                    if ui.button(tr("Export Model…")).on_hover_text(tr("Save the model as STL or 3MF, with the Move tool's changes")).clicked() {
+                        ui.close();
+                        self.export_model_dialog(&ctx);
+                    }
                 });
                 ui.separator();
                 if ui.add(egui::Button::new(tr("Quit")).shortcut_text("Ctrl Q")).clicked() {
@@ -329,6 +335,7 @@ impl ViewerApp {
                 (Tool::Orbit, icons::orbit, "Orbit (O)"),
                 (Tool::Pan, icons::move_arrows, "Pan (G)"),
                 (Tool::Zoom, icons::magnifier, "Zoom (drag up/down)"),
+                (Tool::Move, icons::transform, "Move and rotate (W)"),
                 (Tool::Measure, icons::ruler, "Measure (M)"),
                 (Tool::Section, icons::section, "Section"),
             ] {
@@ -1390,6 +1397,18 @@ impl ViewerApp {
                 widgets::hint(ui, &["LMB"], "Drag the plane");
                 for (keys, action) in self.settings.navigation.hints() {
                     widgets::hint(ui, keys, action);
+                }
+                widgets::hint(ui, &["Q"], "Back to select");
+            } else if self.info.is_some() && self.tool == Tool::Move {
+                if self.lay_face_armed {
+                    widgets::hint(ui, &["LMB"], "Face to lay on the bed");
+                    widgets::hint(ui, &["Esc"], "Cancel");
+                } else {
+                    widgets::hint(ui, &["LMB"], "Drag arrows, rings or center");
+                    widgets::hint(ui, &["Ctrl"], "Snap");
+                    widgets::hint(ui, &["L"], "Lay on face");
+                    widgets::hint(ui, &["B"], "Drop to bed");
+                    widgets::hint(ui, &["Ctrl", "Z"], "Undo");
                 }
                 widgets::hint(ui, &["Q"], "Back to select");
             } else if self.info.is_some() && self.tool == Tool::Measure {

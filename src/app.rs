@@ -17,6 +17,7 @@ use eframe::egui_wgpu;
 
 mod compare;
 mod shell;
+mod transform;
 mod turntable;
 mod uv_pane;
 
@@ -57,6 +58,10 @@ struct ObjectMeta {
     /// Pivot (object origin) in world space, rest pose, and its local X, Y and Z directions.
     origin: Vec3,
     axes: [Vec3; 3],
+    /// The same before the Move tool's transform.
+    rest_bounds: Aabb,
+    rest_origin: Vec3,
+    rest_axes: [Vec3; 3],
 }
 
 struct MaterialMeta {
@@ -114,6 +119,8 @@ enum PickPurpose {
     MeasureClick { free: bool },
     /// Snap indicator and rubber band under the cursor.
     MeasureHover { free: bool },
+    /// Move tool: lay the clicked face on the bed.
+    LayFace,
 }
 
 /// Blender-style selection: a set plus one active object.
@@ -268,6 +275,12 @@ pub struct ViewerApp {
     measure_hover_px: Option<[u32; 2]>,
     /// Cross-section, when on.
     section: Option<Section>,
+    /// Move tool: per-object transform on top of the file's placement, its undo history, the
+    /// gizmo drag in progress, and whether the next click lays a face on the bed.
+    user_transforms: Vec<Mat4>,
+    transform_undo: Vec<Vec<Mat4>>,
+    transform_drag: Option<transform::Drag>,
+    lay_face_armed: bool,
     /// Second model for the A/B comparison, and one being loaded.
     compare: Option<compare::Compare>,
     compare_loading: Option<Loading>,
@@ -365,6 +378,10 @@ impl ViewerApp {
             measure_hover: None,
             measure_hover_px: None,
             section: None,
+            user_transforms: Vec::new(),
+            transform_undo: Vec::new(),
+            transform_drag: None,
+            lay_face_armed: false,
             compare: None,
             compare_loading: None,
             env_image: None,
@@ -445,7 +462,7 @@ impl ViewerApp {
                 .map(|e| format!(".{}", e.to_string_lossy()))
                 .unwrap_or_else(|| tr("This file").into());
             let text = trf(
-                "{ext} isn't supported yet. Supported: glTF, GLB, FBX, OBJ, STL, PLY, 3MF, DAE, and .hdr / .exr environments.",
+                "{ext} isn't supported yet. Supported: glTF, GLB, FBX, OBJ, STL, PLY, 3MF, DAE, STEP, and .hdr / .exr environments.",
                 &[("ext", &ext)],
             );
             self.show_toast(ctx, text, true);
@@ -477,6 +494,7 @@ impl ViewerApp {
             .add_filter("PLY", &["ply"])
             .add_filter("3MF", &["3mf"])
             .add_filter("COLLADA", &["dae"])
+            .add_filter("STEP", &["step", "stp"])
             .pick_file();
         if let Some(path) = picked {
             self.open(path, ctx);
@@ -762,6 +780,10 @@ impl ViewerApp {
         self.cancel_measure();
         self.snap.clear();
         self.section = None;
+        self.user_transforms = vec![Mat4::IDENTITY; n];
+        self.transform_undo.clear();
+        self.transform_drag = None;
+        self.lay_face_armed = false;
         self.uv = None;
         self.uv_view.reset();
         self.visible = vec![true; n];
@@ -865,6 +887,8 @@ impl ViewerApp {
         let Ok(QaResult { report, markers: instances, snap, uv }) = rx.try_recv() else { return };
         self.qa_rx = None;
         self.snap = snap;
+        // The user may have moved objects while the analysis ran.
+        self.transforms_changed(true);
         self.uv = Some(std::sync::Arc::new(uv));
         if let Some(r) = &mut self.renderer {
             r.set_markers(&instances);
@@ -1126,7 +1150,8 @@ impl ViewerApp {
             return;
         }
         let pressed = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
-        for (key, tool) in [(Key::Q, Tool::Select), (Key::O, Tool::Orbit), (Key::G, Tool::Pan), (Key::M, Tool::Measure)] {
+        self.transform_shortcuts(ctx);
+        for (key, tool) in [(Key::Q, Tool::Select), (Key::O, Tool::Orbit), (Key::G, Tool::Pan), (Key::M, Tool::Measure), (Key::W, Tool::Move)] {
             if pressed(Modifiers::NONE, key) {
                 self.tool = tool;
             }
@@ -1178,10 +1203,15 @@ impl ViewerApp {
             if pressed(Modifiers::SHIFT, Key::Delete) || pressed(Modifiers::SHIFT, Key::Backspace) {
                 self.measures.clear();
                 self.cancel_measure();
-            } else if pressed(Modifiers::NONE, Key::Delete)
-                || pressed(Modifiers::NONE, Key::Backspace)
-                || pressed(Modifiers::COMMAND, Key::Z)
-            {
+            } else if pressed(Modifiers::NONE, Key::Delete) || pressed(Modifiers::NONE, Key::Backspace) {
+                self.measures.pop();
+            }
+        }
+        // Ctrl+Z: the last measurement with the Measure tool, otherwise the last move.
+        if pressed(Modifiers::COMMAND, Key::Z) {
+            if self.tool == Tool::Measure && !self.measures.is_empty() {
+                self.measures.pop();
+            } else if !self.undo_transform() {
                 self.measures.pop();
             }
         }
@@ -1275,7 +1305,8 @@ impl ViewerApp {
         }
     }
 
-    fn navigate(&mut self, ui: &Ui, response: &egui::Response, viewport: Rect) {
+    /// `gizmo`: the pointer is on the Move tool's gizmo, so a click there doesn't select.
+    fn navigate(&mut self, ui: &Ui, response: &egui::Response, viewport: Rect, gizmo: bool) {
         let ppp = ui.ctx().pixels_per_point();
         let (mods, scroll, pinch, dt) =
             ui.input(|i| (i.modifiers, i.smooth_scroll_delta, i.zoom_delta(), i.stable_dt.min(0.05)));
@@ -1295,7 +1326,7 @@ impl ViewerApp {
             Tool::Orbit => Some(Gesture::Orbit),
             Tool::Pan => Some(Gesture::Pan),
             Tool::Zoom => Some(Gesture::Zoom),
-            Tool::Measure | Tool::Section => None,
+            Tool::Measure | Tool::Section | Tool::Move => None,
         };
         // Section tool: a left drag slides the plane along its axis, following the axis
         // direction on screen.
@@ -1356,10 +1387,12 @@ impl ViewerApp {
         };
         // Click to select or place a measurement point (not with Alt, which is navigation in
         // most presets; not on a drag).
-        if response.clicked_by(PointerButton::Primary) && !mods.alt && self.info.is_some() {
+        if response.clicked_by(PointerButton::Primary) && !mods.alt && self.info.is_some() && !gizmo {
             if let Some(pos) = response.interact_pointer_pos() {
                 let purpose = if self.tool == Tool::Measure {
                     PickPurpose::MeasureClick { free: mods.ctrl }
+                } else if self.tool == Tool::Move && self.lay_face_armed {
+                    PickPurpose::LayFace
                 } else {
                     PickPurpose::Select { extend: mods.shift }
                 };
@@ -1376,7 +1409,7 @@ impl ViewerApp {
                 }
             }
         }
-        if self.tool == Tool::Measure && response.hovered() {
+        if (self.tool == Tool::Measure || (self.tool == Tool::Move && self.lay_face_armed)) && response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         }
     }
@@ -1395,7 +1428,8 @@ impl ViewerApp {
             self.empty_state(ui, rect);
         } else {
             if !self.pie.is_open() {
-                self.navigate(ui, &response, rect);
+                let gizmo = self.transform_input(ui, &response, self.compare_rect_a(rect));
+                self.navigate(ui, &response, rect, gizmo);
             }
             let dt = ui.input(|i| i.stable_dt).min(0.05);
             if self.camera.update(dt) {
@@ -1407,6 +1441,7 @@ impl ViewerApp {
             self.draw_measures(ui, rect_a);
             self.draw_section(ui, rect_a);
             self.draw_origins(ui, rect_a);
+            self.draw_transform_gizmo(ui, rect_a);
 
             let overlays = self.settings.show_overlays;
             if overlays {
@@ -1429,6 +1464,7 @@ impl ViewerApp {
             }
             self.viewport_toolbar(&ctx, rect);
             self.section_bar(&ctx, rect);
+            self.transform_bar(&ctx, rect);
             self.compare_controls(ui, rect);
             if let Some(loading) = &self.loading {
                 shell::loading_overlay(ui, rect, &file_name(&loading.path));
@@ -1484,6 +1520,7 @@ impl ViewerApp {
             .collect();
         renderer.set_pass_overrides(&overrides);
         renderer.set_visibility(&self.visible);
+        renderer.set_user_transforms(&self.user_transforms);
 
         let pick = self.pending_pick.take();
         let input = FrameInput {
@@ -1534,6 +1571,10 @@ impl ViewerApp {
                 self.measure_hover = point.map(|p| self.snap_point(hit.flatten(), p, px, free, radius));
                 ui.ctx().request_repaint();
             }
+            (Some(PickPurpose::LayFace), _) => {
+                self.lay_on_picked_face(ui.ctx(), hit.flatten(), point);
+                ui.ctx().request_repaint();
+            }
             _ => {}
         }
     }
@@ -1564,6 +1605,27 @@ impl ViewerApp {
             }
         }
         cap.frames += 1;
+        // Move tool steps run once the mesh analysis is in (frame 3 waits for it).
+        let (frames, rotate, auto_orient, export_model) = (cap.frames, cap.opts.rotate, cap.opts.auto_orient, cap.opts.export_model.clone());
+        if frames == 3 {
+            if let Some([x, y, z]) = rotate {
+                let r = Mat4::from_euler(glam::EulerRot::XYZ, x.to_radians(), y.to_radians(), z.to_radians());
+                for i in self.transform_targets() {
+                    self.user_transforms[i] = r * self.user_transforms[i];
+                }
+                self.transforms_changed(true);
+            }
+        }
+        if frames == 4 && auto_orient {
+            self.auto_orient(ctx);
+        }
+        if let (5, Some(out)) = (frames, export_model) {
+            match self.export_model_to(&out) {
+                Ok(()) => println!("exported {}", out.display()),
+                Err(e) => eprintln!("export failed: {e}"),
+            }
+        }
+        let Some(cap) = &mut self.capture else { return };
         if let (4, Some([_, b])) = (cap.frames, cap.opts.measure) {
             self.pending_pick = Some((b, PickPurpose::MeasureClick { free: false }));
         }
@@ -1592,6 +1654,9 @@ impl ViewerApp {
             }
             if cap.opts.pie {
                 self.pie.open(ctx.content_rect().center(), ctx.input(|i| i.time));
+            }
+            if cap.opts.tool_move {
+                self.tool = Tool::Move;
             }
             if cap.opts.uv {
                 self.uv_view.open = true;
@@ -1823,19 +1888,25 @@ fn scene_info(scene: &Scene, path: &Path, load_time: Duration) -> SceneInfo {
         objects: scene
             .meshes
             .iter()
-            .map(|m| ObjectMeta {
-                name: m.name.clone(),
-                triangles: m.triangle_count(),
-                vertices: m.positions.len(),
-                bounds: m.bounds.transformed(&m.transform),
-                material: m.material.min(scene.materials.len() - 1),
-                origin: m.transform.w_axis.truncate(),
-                axes: {
-                    // Undo the file's up-axis conversion so an unrotated object shows X, Y, Z
-                    // like the navigation gizmo (and Blender), not its Y-up file axes.
-                    let t = m.transform * Mat4::from_quat(scene.axis_conversion.inverse());
-                    [t.x_axis, t.y_axis, t.z_axis].map(|a| a.truncate().normalize_or_zero())
-                },
+            .map(|m| {
+                let bounds = m.bounds.transformed(&m.transform);
+                let origin = m.transform.w_axis.truncate();
+                // Undo the file's up-axis conversion so an unrotated object shows X, Y, Z like
+                // the navigation gizmo (and Blender), not its Y-up file axes.
+                let t = m.transform * Mat4::from_quat(scene.axis_conversion.inverse());
+                let axes = [t.x_axis, t.y_axis, t.z_axis].map(|a| a.truncate().normalize_or_zero());
+                ObjectMeta {
+                    name: m.name.clone(),
+                    triangles: m.triangle_count(),
+                    vertices: m.positions.len(),
+                    bounds,
+                    material: m.material.min(scene.materials.len() - 1),
+                    origin,
+                    axes,
+                    rest_bounds: bounds,
+                    rest_origin: origin,
+                    rest_axes: axes,
+                }
             })
             .collect(),
         vertices: scene.source_vertex_count,
@@ -1856,7 +1927,7 @@ fn spawn_analysis(scene: Scene, ctx: &egui::Context) -> Receiver<QaResult> {
         log::info!("mesh analysis in {:?}: {report:?}", started.elapsed());
         let markers = scene.meshes.iter().zip(&marks).map(|(m, k)| render::marker_instances(m, k)).collect();
         let uv = crate::uv::extract(&scene.meshes, &scene.materials, &scene.images);
-        let snap = scene.meshes.into_iter().map(|m| snap::SnapMesh::new(m.transform, m.positions)).collect();
+        let snap = scene.meshes.into_iter().map(|m| snap::SnapMesh::new(m.transform, m.positions, m.indices)).collect();
         if tx.send(QaResult { report, markers, snap, uv }).is_ok() {
             ctx.request_repaint();
         }

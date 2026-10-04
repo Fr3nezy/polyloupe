@@ -250,6 +250,8 @@ pub struct Renderer {
     visible: Vec<bool>,
     selection: Vec<u32>,
     pass_overrides: Vec<u32>,
+    /// The user's move per object (Move tool), applied on top of the file's placement.
+    user_transforms: Vec<Mat4>,
     objects_key: Option<(ColorMode, [u8; 3])>,
     objects_dirty: bool,
     /// Result of the last pick request: `Some(None)` means "clicked empty space".
@@ -467,6 +469,7 @@ impl Renderer {
             visible: Vec::new(),
             selection: Vec::new(),
             pass_overrides: Vec::new(),
+            user_transforms: Vec::new(),
             objects_key: None,
             objects_dirty: true,
             picked: None,
@@ -662,6 +665,7 @@ impl Renderer {
         self.visible = vec![true; n];
         self.selection = vec![0; n];
         self.pass_overrides = vec![0; n];
+        self.user_transforms = vec![Mat4::IDENTITY; n];
         if n > self.object_capacity {
             let capacity = n.next_power_of_two();
             let (buf, bg) = create_object_buffer(&self.device, &self.object_bgl, capacity, self.object_stride, &self.joints_buf);
@@ -790,6 +794,14 @@ impl Renderer {
         }
     }
 
+    /// The user's move per object, applied on top of the file's (or the animation's) placement.
+    pub fn set_user_transforms(&mut self, transforms: &[Mat4]) {
+        if transforms != self.user_transforms.as_slice() {
+            self.user_transforms = transforms.to_vec();
+            self.objects_dirty = true;
+        }
+    }
+
     /// Per object: 0 = follow the global color mode, otherwise texture pass index + 1.
     pub fn set_pass_overrides(&mut self, passes: &[u32]) {
         if passes != self.pass_overrides.as_slice() {
@@ -818,9 +830,10 @@ impl Renderer {
                 Some(1) => FLAG_SELECTED,
                 _ => 0,
             };
+            let model = self.user_transforms.get(i).copied().unwrap_or(Mat4::IDENTITY) * o.model;
             let u = ObjectUniform {
-                model: o.model.to_cols_array_2d(),
-                normal_mat: o.model.inverse().transpose().to_cols_array_2d(),
+                model: model.to_cols_array_2d(),
+                normal_mat: model.inverse().transpose().to_cols_array_2d(),
                 color,
                 info: [i as u32 + 1, o.flags | sel, o.joint_base, self.pass_overrides.get(i).copied().unwrap_or(0)],
             };

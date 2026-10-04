@@ -48,6 +48,12 @@ pub struct CaptureOptions {
     /// Also runs File > Export Image to this path (with the export preferences).
     pub export: Option<PathBuf>,
     pub frame: Option<i32>,
+    /// Move tool: switch to it, rotate the selection (degrees about X, Y, Z), lay it on its
+    /// best side, and save the result as STL/3MF.
+    pub tool_move: bool,
+    pub rotate: Option<[f32; 3]>,
+    pub auto_orient: bool,
+    pub export_model: Option<PathBuf>,
     settings: Vec<(String, Option<String>)>,
 }
 
@@ -172,6 +178,17 @@ pub fn parse() -> Result<LaunchOptions, String> {
             "--select" => capture.select = value("--select")?.parse().ok(),
             "--clip" => capture.clip = value("--clip")?.parse().ok(),
             "--frame" => capture.frame = value("--frame")?.parse().ok(),
+            "--tool" => capture.tool_move = value("--tool")? == "move",
+            "--rotate" => {
+                let v: Vec<f32> = value("--rotate")?.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                let [x, y, z] = v[..] else { return Err("--rotate expects X,Y,Z degrees".into()) };
+                capture.rotate = Some([x, y, z]);
+            }
+            "--auto-orient" => capture.auto_orient = true,
+            "--export-model" => {
+                capture.export_model = Some(PathBuf::from(value("--export-model")?));
+                capturing = true;
+            }
             "--export" => {
                 capture.export = Some(PathBuf::from(value("--export")?));
                 capturing = true;

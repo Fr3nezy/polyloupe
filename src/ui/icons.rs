@@ -230,6 +230,24 @@ pub fn move_arrows(p: &Painter, rect: Rect, color: Color32) {
     }
 }
 
+/// Move tool: a transform gizmo, two arrows and a rotation arc.
+pub fn transform(p: &Painter, rect: Rect, color: Color32) {
+    let g = grid(rect, 18.0);
+    let s = stroke_for(rect, 18.0, 1.5, color);
+    let k = rect.width().min(rect.height()) / 18.0;
+    p.line_segment([g(5.0, 13.0), g(5.0, 2.5)], s);
+    polyline(p, vec![g(3.0, 4.5), g(5.0, 2.5), g(7.0, 4.5)], false, s);
+    p.line_segment([g(5.0, 13.0), g(15.5, 13.0)], s);
+    polyline(p, vec![g(13.5, 11.0), g(15.5, 13.0), g(13.5, 15.0)], false, s);
+    let arc: Vec<Pos2> = (0..=12)
+        .map(|i| {
+            let a = -TAU * 0.25 + i as f32 / 12.0 * TAU * 0.25;
+            g(5.0, 13.0) + vec2(a.cos(), a.sin()) * 7.0 * k
+        })
+        .collect();
+    p.add(Shape::line(arc, s));
+}
+
 /// Zoom tool: magnifier with a plus.
 /// A/B side by side: two frames.
 pub fn compare_side(p: &Painter, rect: Rect, color: Color32) {

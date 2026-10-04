@@ -177,8 +177,8 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "3D models" => "Modelli 3D",
         "Load HDRI environment" => "Carica ambiente HDRI",
         "This file" => "Questo file",
-        "{ext} isn't supported yet. Supported: glTF, GLB, FBX, OBJ, STL, PLY, 3MF, DAE, and .hdr / .exr environments." => {
-            "{ext} non è ancora supportato. Supportati: glTF, GLB, FBX, OBJ, STL, PLY, 3MF, DAE e ambienti .hdr / .exr."
+        "{ext} isn't supported yet. Supported: glTF, GLB, FBX, OBJ, STL, PLY, 3MF, DAE, STEP, and .hdr / .exr environments." => {
+            "{ext} non è ancora supportato. Supportati: glTF, GLB, FBX, OBJ, STL, PLY, 3MF, DAE, STEP e ambienti .hdr / .exr."
         }
         "Couldn't open {name}: {error}" => "Impossibile aprire {name}: {error}",
         "the model needs {needed} MB GPU buffers, this GPU allows {limit} MB" => {
@@ -193,6 +193,31 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Save image" => "Salva immagine",
         "PNG image" => "Immagine PNG",
         "Saved {name}" => "Salvata {name}",
+        "Model saved: {name}" => "Modello salvato: {name}",
+        "Couldn't save {name}: {error}" => "Impossibile salvare {name}: {error}",
+        "Export Model…" => "Esporta modello…",
+        "Export Model" => "Esporta modello",
+        "Save the model as STL or 3MF, with the Move tool's changes" => {
+            "Salva il modello come STL o 3MF, con le modifiche dello strumento Sposta"
+        }
+        "Save the moved model as STL or 3MF" => "Salva il modello spostato come STL o 3MF",
+        "Still analyzing the model, try again in a moment" => "Analisi del modello in corso, riprova tra un attimo",
+        "No flat face to lay the model on" => "Nessuna faccia piana su cui appoggiare il modello",
+        "Select an object" => "Seleziona un oggetto",
+        "Click a face to put it down on the bed (L)" => "Clicca una faccia per appoggiarla sul piano (L)",
+        "Lay the model on its largest flat side (Shift L)" => "Appoggia il modello sul lato piano più grande (Shift L)",
+        "Move down until it touches the bed (B)" => "Abbassa finché tocca il piano (B)",
+        "Back to the position in the file (Alt G)" => "Torna alla posizione del file (Alt G)",
+        "Move and rotate (W)" => "Sposta e ruota (W)",
+        "Lay on face" => "Appoggia su faccia",
+        "Auto orient" => "Orienta in automatico",
+        "Drop to bed" => "Porta sul piano",
+        "Reset" => "Ripristina",
+        "Face to lay on the bed" => "Faccia da appoggiare sul piano",
+        "Drag arrows, rings or center" => "Trascina frecce, anelli o centro",
+        "Snap" => "Scatti",
+        "Undo" => "Annulla",
+        "Cancel" => "Annulla",
         "Couldn't save the image: {error}" => "Impossibile salvare l'immagine: {error}",
         "Couldn't render the image" => "Impossibile renderizzare l'immagine",
 
