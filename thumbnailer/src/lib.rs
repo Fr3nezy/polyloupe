@@ -6,7 +6,8 @@
 //!   Windows run it isolated in its thumbnail process (`dllhost`), which only hands the handler a
 //!   stream of the file's bytes: the same path for every drive and every caller.
 //! - Path handler, for formats that keep data in files next to the model (.gltf with external
-//!   buffers and textures, .obj with its .mtl). Those need the file's path, which Windows only
+//!   buffers and textures, .obj with its .mtl) or that need OpenCASCADE, which lives next to
+//!   polyloupe.exe (.step, .stp). Those need the file's path, which Windows only
 //!   gives a handler that opts out of isolation (`DisableProcessIsolation`), so it runs inside
 //!   Explorer. Like F3D's handler, it never parses the model there: it runs
 //!   `polyloupe.exe --thumbnail` (the same CPU renderer, no window) with a timeout and reads back
@@ -72,11 +73,14 @@ const CLSID_PATH_THUMBNAILER: GUID = GUID::from_u128(0xdc5c1405_f891_448f_8713_3
 const CLSID_PATH_STRING: &str = "{dc5c1405-f891-448f-8713-3de1d48c455c}";
 /// The shell's IThumbnailProvider handler category.
 const THUMBNAIL_HANDLER_KEY: &str = "{e357fccd-a995-4576-b01f-234630154e96}";
-const EXTENSIONS: &[&str] = &[".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply", ".3mf", ".dae"];
-/// Formats whose data can live in other files: served by the path handler.
-const PATH_EXTENSIONS: &[&str] = &[".gltf", ".obj"];
-/// How long the path handler waits for `polyloupe.exe --thumbnail` before killing it.
+const EXTENSIONS: &[&str] = &[".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply", ".3mf", ".dae", ".step", ".stp"];
+/// Formats served by the path handler: their data can live in other files, or they need
+/// polyloupe_step.dll next to polyloupe.exe.
+const PATH_EXTENSIONS: &[&str] = &[".gltf", ".obj", ".step", ".stp"];
+/// How long the path handler waits for `polyloupe.exe --thumbnail` before killing it. A big
+/// STEP takes OpenCASCADE a while the first time; the mesh it caches makes later ones fast.
 const VIEWER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
 static MODULE: AtomicIsize = AtomicIsize::new(0);
 static SEQUENCE: AtomicU32 = AtomicU32::new(0);
@@ -300,7 +304,8 @@ fn render_with_viewer(path: &Path, size: u32) -> std::result::Result<(u32, u32, 
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map_err(|e| format!("couldn't start {}: {e}", exe.display()))?;
-    let deadline = std::time::Instant::now() + VIEWER_TIMEOUT;
+    let step = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("step") || e.eq_ignore_ascii_case("stp"));
+    let deadline = std::time::Instant::now() + if step { STEP_TIMEOUT } else { VIEWER_TIMEOUT };
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
