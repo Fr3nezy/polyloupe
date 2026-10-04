@@ -65,6 +65,7 @@ impl ViewerApp {
         let Some(loading) = &self.compare_loading else { return };
         let Ok(result) = loading.rx.try_recv() else { return };
         let loading = self.compare_loading.take().expect("checked above");
+        let result = result.and_then(|s| self.renderer.as_ref().map_or(Ok(()), |r| r.check_fits(&s)).map(|_| s));
         let mut scene = match result {
             Ok(scene) => scene,
             Err(err) => {

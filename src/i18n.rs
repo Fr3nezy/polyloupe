@@ -181,6 +181,9 @@ fn italian_text(en: &str) -> Option<&'static str> {
             "{ext} non è ancora supportato. Supportati: glTF, GLB, FBX, OBJ, STL, PLY, 3MF, DAE e ambienti .hdr / .exr."
         }
         "Couldn't open {name}: {error}" => "Impossibile aprire {name}: {error}",
+        "the model needs {needed} MB GPU buffers, this GPU allows {limit} MB" => {
+            "il modello richiede buffer GPU da {needed} MB, questa GPU ne consente {limit} MB"
+        }
         "{first} (+{more} more)" => "{first} (+{more} altri)",
         "Missing texture: {name}" => "Texture mancante: {name}",
         "Unsupported glTF extensions ({list}): the model may look wrong or be incomplete" => {

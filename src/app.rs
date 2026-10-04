@@ -721,6 +721,7 @@ impl ViewerApp {
     /// Shows a freshly read model. `started` is when opening was asked for, so the "opened in"
     /// time covers reading, uploading and (at launch) setting up the window and the GPU.
     fn finish_loading(&mut self, ctx: &egui::Context, path: &Path, started: Instant, result: Result<Scene, String>) {
+        let result = result.and_then(|s| self.renderer.as_ref().map_or(Ok(()), |r| r.check_fits(&s)).map(|_| s));
         let mut scene = match result {
             Ok(scene) => scene,
             Err(err) => {

@@ -477,6 +477,27 @@ impl Renderer {
         self.ibl.set_environment(&self.device, &self.queue, env);
     }
 
+    /// Whether every mesh buffer fits this GPU's largest buffer: wgpu treats an oversized buffer
+    /// as a fatal error, so a model too big for the GPU must be refused before uploading.
+    pub fn check_fits(&self, scene: &Scene) -> Result<(), String> {
+        let limit = self.device.limits().max_buffer_size;
+        // 16 bytes is the widest per-vertex attribute (tangents, colors, the zero buffer).
+        let largest = scene
+            .meshes
+            .iter()
+            .map(|m| (m.positions.len() as u64 * 16).max(m.indices.len() as u64 * 4).max(m.edges.len() as u64 * 4))
+            .max()
+            .unwrap_or(0);
+        if largest <= limit {
+            return Ok(());
+        }
+        let mb = |b: u64| (b / (1024 * 1024)).to_string();
+        Err(crate::i18n::trf(
+            "the model needs {needed} MB GPU buffers, this GPU allows {limit} MB",
+            &[("needed", &mb(largest)), ("limit", &mb(limit))],
+        ))
+    }
+
     pub fn upload_scene(&mut self, scene: &Scene) {
         self.meshes.clear();
         self.objects.clear();

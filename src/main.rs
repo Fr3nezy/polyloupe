@@ -146,6 +146,14 @@ fn wgpu_setup() -> egui_wgpu::WgpuSetup {
             .cloned()
             .ok_or_else(|| "no GPU adapter can draw to this window".to_string())
     }));
+    // wgpu's default 256 MB buffer cap rejects big scans and CAD exports (a 5.6M triangle STL
+    // needs ~270 MB per attribute buffer): allow whatever the GPU supports.
+    let default_descriptor = setup.device_descriptor.clone();
+    setup.device_descriptor = std::sync::Arc::new(move |adapter| {
+        let mut desc = default_descriptor(adapter);
+        desc.required_limits.max_buffer_size = adapter.limits().max_buffer_size;
+        desc
+    });
     egui_wgpu::WgpuSetup::CreateNew(setup)
 }
 
