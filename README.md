@@ -23,12 +23,21 @@ this repository by `scripts/build-installer.ps1`, and its SHA-256 is listed in t
 
 ## What it does
 
-- Opens glTF/GLB, FBX, OBJ (with MTL textures), STL, PLY, 3MF and COLLADA (.dae); files load on a
-  background thread.
+- Opens glTF/GLB, FBX, OBJ (with MTL textures), STL, PLY, 3MF, COLLADA (.dae) and STEP
+  (.step/.stp); files load on a background thread.
   glTF support covers metallic-roughness PBR, skinning, morph targets, animation,
   `KHR_texture_transform` and `EXT_texture_webp`; other extensions are ignored, and a file that
   requires one (Draco, meshopt, ...) still opens with a warning, though it may look wrong or be
   incomplete. All 150 Khronos glTF Sample Assets open.
+  STEP files go through [OpenCASCADE](https://dev.opencascade.org/) with assembly parts, names and
+  colors; the CAD kernel lives in its own DLL, loaded only when a STEP file is opened, and the
+  meshed result is cached so the same file opens in a moment the next time.
+- Two workspaces, picked from the file type (switch in the title bar):
+  - Manufacturing (STL, 3MF, STEP, PLY): millimeters, a Move tool (W) with a transform gizmo,
+    Lay on face, Auto orient and Drop to bed for print orientation, Export Model to STL or 3MF,
+    and print finishes for quick renders (PLA, PETG, Silk PLA, resin, nylon SLS, metal SLM) with
+    layer lines that follow the bed.
+  - 3D Art (glTF, FBX, OBJ, DAE): textures, UVs, channels and animation, in meters like Blender.
 - Explorer thumbnails for all of them (rendered by a small self-contained handler, like Blender's
   for .blend files), plus "Open with" and Default apps entries.
 - Wireframe, Solid and Rendered shading, like Blender:
@@ -92,6 +101,10 @@ Blender's by default (the mouse part changes with the navigation preset):
 | Z | Shading pie menu |
 | Shift+Z / Alt+Z / Shift+Alt+Z | Toggle wireframe / X-ray / overlays |
 | Q / O / G / M | Select / Orbit / Pan / Measure tool |
+| W | Move tool (Manufacturing): drag arrows, rings or center, Ctrl snaps |
+| L / Shift+L / B / Alt+G | Lay on face / auto orient / drop to bed / reset (Move tool) |
+| Del / Shift+Del | Remove the last measurement / all of them |
+| Ctrl+Z | Undo the last move (or measurement, in the Measure tool) |
 | C / Shift+C | Next / previous texture channel |
 | U | UV layout |
 | Space | Play / pause animation |
@@ -105,9 +118,12 @@ Top-row digits work as numpad keys, so laptops without a numpad are covered.
 
 ## Build
 
-Requires Rust (stable) and, on Windows, the MSVC build tools.
+Requires Rust (stable) and, on Windows, the MSVC build tools. The STEP reader also needs CMake:
+the first build compiles OpenCASCADE from its official sources into `target/occt` (10-30 minutes,
+once).
 
 ```bash
+cargo build --release --workspace
 cargo run --release -- path/to/model.glb
 ```
 
@@ -120,14 +136,15 @@ powershell -ExecutionPolicy Bypass -File scripts/build-installer.ps1
 Builds everything and writes `target\installer\PolyLoupe-Setup-<version>.exe` (English or Italian
 wizard, built with [Inno Setup](https://jrsoftware.org/isinfo.php)). It installs to
 `Program Files`, registers the thumbnail handler, adds PolyLoupe to "Open with" and Default apps
-for .glb .gltf .fbx .obj .stl .ply .3mf .dae, and offers to open Default apps at the end (Windows
+for .glb .gltf .fbx .obj .stl .ply .3mf .dae .step .stp, and offers to open Default apps at the end (Windows
 doesn't let installers pick the default app themselves).
 
 The thumbnail handler works like Blender's handler for .blend files: Windows runs it in its
 isolated thumbnail process and hands it the file's bytes, and the DLL parses the model and renders
 it on the CPU (no GPU, no helper process), in about 30 ms for a typical model. .gltf and .obj files
 can keep their data in files next to them (buffers, .mtl, textures), which that isolated process
-can't see, so those two formats get a second handler, built like F3D's: Windows gives it the
+can't see, and STEP needs the OpenCASCADE DLL next to polyloupe.exe, so those formats get a second
+handler, built like F3D's: Windows gives it the
 file's path, and it runs `polyloupe --thumbnail` in a separate process with a timeout, so a broken
 file never takes Explorer down. `polyloupe --thumbnail model.glb out.png 256` renders exactly what
 Explorer shows.
