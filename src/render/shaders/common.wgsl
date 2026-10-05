@@ -32,6 +32,7 @@ struct Globals {
     normals: vec4<f32>,
     // x: 1 when the interface calls Y up: world Y lines are drawn blue (Z) and world Z green (Y).
     // y: 1 for the neutral plastic material (Manufacturing): the file's materials are ignored.
+    // z: strength of the surface imperfection on the neutral plastic (0 = none).
     display: vec4<f32>,
     // Print finish (Rendered mode): x finish id (0 off), y layer height in world units,
     // w world units per millimeter.

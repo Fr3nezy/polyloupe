@@ -200,6 +200,10 @@ fn italian_text(en: &str) -> Option<&'static str> {
             "Area di lavoro\nManifattura: CAD e stampa 3D, millimetri, materiale plastica neutra\n3D Art: texture, UV, animazione, i materiali del file"
         }
         "PolyLoupe {version} is available" => "È disponibile PolyLoupe {version}",
+        "Surface imperfection" => "Imperfezioni superficie",
+        "Fine relief and uneven gloss over the whole model, for a more realistic preview. 0 = perfectly smooth" => {
+            "Rilievo fine e lucentezza non uniforme su tutto il modello, per un'anteprima più realistica. 0 = perfettamente liscio"
+        }
         "Download" => "Scarica",
         "Check for updates" => "Controlla gli aggiornamenti",
         "Once a day, PolyLoupe asks GitHub whether a newer release exists. Nothing is downloaded or installed" => {

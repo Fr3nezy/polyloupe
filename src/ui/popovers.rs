@@ -179,6 +179,13 @@ pub fn part_material(ui: &mut Ui, s: &mut Settings) {
             ui.label(RichText::new(tr("Satin plastic, the file's materials are ignored")).size(11.0).color(theme::TEXT_DIM));
         });
     }
+    if !s.file_materials && s.shading != ShadingMode::Wireframe {
+        ui.add(egui::Slider::new(&mut s.surface_imperfection, 0.0..=1.0)
+            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+            .custom_parser(|t| t.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0))
+            .text(tr("Surface imperfection")))
+            .on_hover_text(tr("Fine relief and uneven gloss over the whole model, for a more realistic preview. 0 = perfectly smooth"));
+    }
 }
 
 /// Print finish for quick renders of a part: material, layer height, filament color.

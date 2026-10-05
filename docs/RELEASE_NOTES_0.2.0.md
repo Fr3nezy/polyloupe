@@ -17,6 +17,7 @@ Two workspaces, STEP files, and a Move tool. This release turns PolyLoupe from a
 - **Plain plastic in Manufacturing.** Parts show as neutral satin plastic (light grey, roughness
   0.5, non-metallic) and ignore the file's materials and textures. Shading > Part Material
   changes the color, or switches to "File materials". 3D Art keeps each file's own materials.
+- **Surface imperfection** (Shading > Part Material, default 25%): a subtle global relief and uneven gloss on the plastic, in millimeters and world space, so STL and STEP parts look less like a perfect CG surface. 0% turns it off; it applies to the plastic material only, not to "File materials" or 3D Art.
 - **Print finishes** for quick renders: PLA, PETG, Silk PLA, resin, nylon SLS, metal SLM, with
   layer lines that follow the bed.
 - **Move tool (W)** with a transform gizmo, Lay on face, Auto orient, Drop to bed, and Export
@@ -47,6 +48,7 @@ Two workspaces, STEP files, and a Move tool. This release turns PolyLoupe from a
 - **Plastica neutra in Manifattura**: grigio chiaro satinato, ignora materiali e texture del file.
   In Shading > Materiale del pezzo puoi cambiare colore o usare i "Materiali del file". In 3D Art
   restano i materiali del file.
+- **Imperfezioni superficie** (Shading > Materiale del pezzo, 25% di default): lieve rilievo e lucentezza non uniforme sulla plastica; 0% la spegne.
 - **Finiture di stampa** (PLA, PETG, Silk PLA, resina, nylon, metallo) con layer che seguono il piano.
 - **Strumento Sposta (W)** con gizmo, Appoggia su faccia, Orienta automaticamente, Export STL/3MF.
 - **Modalità più pulite**: Texture, Attribute, tab Materiali, canali e UV solo in 3D Art.

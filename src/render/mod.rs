@@ -1058,9 +1058,11 @@ impl Renderer {
             markers: [s.show_non_manifold as u32, s.show_open_edges as u32, s.show_overlapping as u32, 0],
             section: input.section.unwrap_or([0.0; 4]),
             normals: [if s.show_normals { input.normal_length } else { 0.0 }, s.show_face_orientation as u32 as f32, 0.0, 0.0],
-            display: [(s.up_axis == crate::axes::UpAxis::Y) as u32 as f32, neutral as u32 as f32, 0.0, 0.0],
-            finish: if rendered && input.print_scale > 0.0 {
-                [s.finish.shader_id() as f32, s.layer_height.max(0.01) * input.print_scale, 0.0, input.print_scale]
+            display: [(s.up_axis == crate::axes::UpAxis::Y) as u32 as f32, neutral as u32 as f32, if neutral { s.surface_imperfection.clamp(0.0, 1.0) } else { 0.0 }, 0.0],
+            // The scale (w) also sizes the surface imperfection in Solid; the finish id only counts in Rendered.
+            finish: if input.print_scale > 0.0 {
+                let id = if rendered { s.finish.shader_id() } else { 0 };
+                [id as f32, s.layer_height.max(0.01) * input.print_scale, 0.0, input.print_scale]
             } else {
                 [0.0; 4]
             },

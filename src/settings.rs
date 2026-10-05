@@ -256,6 +256,9 @@ pub struct Settings {
     /// file's materials and textures, unless this is on. 3D Art always uses the file's own.
     pub file_materials: bool,
     pub plastic_color: [u8; 3],
+    /// Rendered mode in Manufacturing: 0..1 strength of the subtle global surface imperfection
+    /// (micro relief and uneven gloss) that makes a part look less like a perfect CG surface.
+    pub surface_imperfection: f32,
 }
 
 impl Default for Settings {
@@ -319,6 +322,7 @@ impl Default for Settings {
             layer_height: 0.2,
             file_materials: false,
             plastic_color: [200, 200, 196],
+            surface_imperfection: 0.25,
         }
     }
 }

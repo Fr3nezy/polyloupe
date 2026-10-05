@@ -172,7 +172,7 @@ cargo run --release -- model.glb --capture out.png --size 1280x800 --shading ren
 Flags: `--shading wireframe|solid|rendered`, `--lighting studio|matcap|flat`,
 `--color material|single|random|texture|attribute`, `--pass basecolor|roughness|metallic|normal|ao|emission|alpha|uvgrid`,
 `--matcap N`, `--env forest|studio|sunset|PATH.hdr|PATH.exr`, `--env-bg`, `--xray`, `--wire-overlay`,
-`--workspace manufacturing|art`, `--file-materials`, `--no-grid`, `--no-outline`, `--view front|back|right|left|top|bottom`, `--ortho`,
+`--workspace manufacturing|art`, `--file-materials`, `--imperfection 0..1`, `--no-overlays`, `--no-grid`, `--no-outline`, `--view front|back|right|left|top|bottom`, `--ortho`,
 `--popover shading|overlays|channel|preferences|welcome`, `--nav blender|maya|zbrush|max|gameengine|cad`, `--pie`, `--sidebar`, `--select N`, `--click X,Y`,
 `--channel PASS` (on the selection), `--clip N`, `--frame N`, `--fps`, `--popover preferences`.
 `--export OUT.png [--export-scale 1|2|4] [--transparent]` runs File > Export Image instead of a

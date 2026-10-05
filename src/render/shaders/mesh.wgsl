@@ -371,12 +371,33 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
             rough = f.rough;
             ao *= f.ao;
         }
+        // Global surface imperfection: fine relief, uneven gloss and faint blotches, in world
+        // space (millimeters), so it needs no UVs and follows the part when it is moved.
+        if g.display.z > 0.0 {
+            let k = g.display.z;
+            let scale = 1.0 / (0.4 * g.finish.w);
+            let q = in.world_pos * scale;
+            let fine = 1.0 - smoothstep(0.5, 1.5, length(pos_fw) * scale);
+            let gn = vec3<f32>(noise3(q), noise3(q + vec3<f32>(17.3)), noise3(q + vec3<f32>(41.7))) - vec3<f32>(0.5);
+            let broad = noise3(q * 0.06 + vec3<f32>(5.0)) - 0.5;
+            n = normalize(n + gn * 0.35 * k * fine);
+            rough = clamp(rough + ((noise3(q * 0.3 + vec3<f32>(3.1)) - 0.5) * fine + broad) * 0.5 * k, 0.03, 1.0);
+            albedo *= 1.0 + broad * 0.1 * k;
+        }
         color = ibl(n, v, albedo, clamp(metallic, 0.0, 1.0), clamp(rough, 0.03, 1.0)) * ao + emissive;
         color = view_transform(color * g.params.y, g.extra.y);
     } else if cmode == 4u {
         let c = select(vec3<f32>(0.8), in.color.rgb, has(HAS_COLOR));
         color = lit(n, c);
     } else {
+        // Solid: only a light touch of relief in the shading, no gloss to vary.
+        if g.display.z > 0.0 {
+            let scale = 1.0 / (0.4 * g.finish.w);
+            let q = in.world_pos * scale;
+            let fine = 1.0 - smoothstep(0.5, 1.5, length(pos_fw) * scale);
+            let gn = vec3<f32>(noise3(q), noise3(q + vec3<f32>(17.3)), noise3(q + vec3<f32>(41.7))) - vec3<f32>(0.5);
+            n = normalize(n + gn * 0.12 * g.display.z * fine);
+        }
         color = lit(n, obj.color.rgb);
         alpha = obj.color.a;
     }
