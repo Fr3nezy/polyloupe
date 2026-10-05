@@ -199,6 +199,12 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Workspace\nManufacturing: CAD and 3D printing, millimeters, plain plastic material\n3D Art: textures, UVs, animation, the file's own materials" => {
             "Area di lavoro\nManifattura: CAD e stampa 3D, millimetri, materiale plastica neutra\n3D Art: texture, UV, animazione, i materiali del file"
         }
+        "PolyLoupe {version} is available" => "È disponibile PolyLoupe {version}",
+        "Download" => "Scarica",
+        "Check for updates" => "Controlla gli aggiornamenti",
+        "Once a day, PolyLoupe asks GitHub whether a newer release exists. Nothing is downloaded or installed" => {
+            "Una volta al giorno PolyLoupe chiede a GitHub se esiste una versione più recente. Non scarica né installa nulla"
+        }
         "Hide the side panel (N)" => "Nascondi il pannello laterale (N)",
         "Show the side panel (N)" => "Mostra il pannello laterale (N)",
         "Part Material" => "Materiale del pezzo",

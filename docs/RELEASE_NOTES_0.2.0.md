@@ -23,6 +23,7 @@ Two workspaces, STEP files, and a Move tool. This release turns PolyLoupe from a
   Model to STL or 3MF. It works without a selection and shows the face to lay on.
 - **Cleaner modes.** Texture and Attribute colors, the Materials tab, the channel strip and the
   UV pane belong to 3D Art only; Manufacturing no longer offers them.
+- **Update check**: once a day PolyLoupe asks GitHub whether a newer release exists and shows a banner with a Download button (Preferences > Check for updates turns it off). Nothing is downloaded or installed by the app.
 - **Side panel button** at the top right (tooltip: "Show/Hide the side panel (N)").
 - Measure: Delete removes only the last measurement. Models whose buffers exceed 256 MB open.
 

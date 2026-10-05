@@ -198,6 +198,10 @@ pub struct Settings {
     pub view_transform: ViewTransform,
 
     pub show_sidebar: bool,
+    /// Ask GitHub once a day whether a newer release exists, and say so in a banner.
+    pub check_updates: bool,
+    /// Day (since the Unix epoch) of the last check.
+    pub last_update_check: u64,
     /// Which axis the interface calls up (display only, see `axes`).
     pub up_axis: crate::axes::UpAxis,
     /// Master switch, like Blender's overlays toggle.
@@ -278,6 +282,8 @@ impl Default for Settings {
             env_blur: 0.4,
             view_transform: ViewTransform::AgX,
             show_sidebar: false,
+            check_updates: true,
+            last_update_check: 0,
             up_axis: crate::axes::UpAxis::Z,
             show_overlays: true,
             show_grid: true,

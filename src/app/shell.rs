@@ -45,6 +45,8 @@ pub(super) enum InspectorTab {
 pub(super) enum ToastAction {
     /// Opens the inspector on the Materials tab (missing textures).
     ShowMaterials,
+    /// Opens the releases page (a newer version exists).
+    OpenReleases,
 }
 
 impl ViewerApp {
@@ -1583,7 +1585,7 @@ impl ViewerApp {
                             icons::warning(ui.painter(), r, if toast.error { theme::ERROR } else { theme::TEXT });
                             ui.label(RichText::new(&toast.text).color(theme::TEXT));
                             if let Some(a) = toast.action {
-                                if primary_button(ui, "Fix", 32.0, None).clicked() {
+                                if primary_button(ui, if a == ToastAction::OpenReleases { "Download" } else { "Fix" }, 32.0, None).clicked() {
                                     act = Some(a);
                                 }
                             }
@@ -1593,10 +1595,17 @@ impl ViewerApp {
                         });
                     });
             });
-        if let Some(ToastAction::ShowMaterials) = act {
-            self.settings.show_sidebar = true;
-            self.inspector_tab = InspectorTab::Materials;
-            close = true;
+        match act {
+            Some(ToastAction::ShowMaterials) => {
+                self.settings.show_sidebar = true;
+                self.inspector_tab = InspectorTab::Materials;
+                close = true;
+            }
+            Some(ToastAction::OpenReleases) => {
+                let _ = std::process::Command::new("explorer.exe").arg(format!("{REPO_URL}/releases/latest")).spawn();
+                close = true;
+            }
+            None => {}
         }
         if close {
             self.toast = None;

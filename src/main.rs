@@ -17,6 +17,7 @@ mod settings;
 mod snap;
 mod thumbnail;
 mod ui;
+mod update;
 mod uv;
 
 // Scene model and loaders live in polyloupe-core, shared with the thumbnail handler.

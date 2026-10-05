@@ -24,6 +24,7 @@ mod uv_pane;
 use crate::anim::AnimPlayer;
 use crate::camera::{AxisView, Camera};
 use crate::cli::{CaptureOptions, LaunchOptions};
+use crate::update;
 use crate::i18n::{self, Language, tr, trf};
 use crate::instance;
 use shell::{InspectorTab, ToastAction, Tool};
@@ -250,6 +251,8 @@ pub struct ViewerApp {
     loading: Option<Loading>,
     /// Mesh analysis of the loaded scene: totals plus marker instances per mesh.
     qa_rx: Option<Receiver<QaResult>>,
+    /// Answer of the daily "is there a newer release" check.
+    update_rx: Option<Receiver<Option<String>>>,
     /// Vertices per object for the Measure tool's snapping (arrives with the analysis).
     snap: Vec<snap::SnapMesh>,
     selection: Selection,
@@ -364,6 +367,7 @@ impl ViewerApp {
             info: None,
             loading: None,
             qa_rx: None,
+            update_rx: None,
             snap: Vec::new(),
             selection: Selection::default(),
             visible: Vec::new(),
@@ -416,6 +420,7 @@ impl ViewerApp {
             reveal: Reveal::Done,
         };
         app.workspace = app.settings.workspace;
+        app.start_update_check();
         if RESTORE_MAXIMIZED.load(Ordering::Relaxed) && crate::cloak::set_cloaked(cc, true) {
             app.reveal = Reveal::Cloaked { painted: false, frames: 0 };
         }
@@ -643,6 +648,9 @@ impl ViewerApp {
                     });
                 ui.checkbox(&mut s.auto_workspace, tr("Pick the workspace from the file type")).on_hover_text(tr(
                     "STL, 3MF, STEP and PLY open in Manufacturing, the other formats in 3D Art. Off: the workspace you chose last",
+                ));
+                ui.checkbox(&mut s.check_updates, tr("Check for updates")).on_hover_text(tr(
+                    "Once a day, PolyLoupe asks GitHub whether a newer release exists. Nothing is downloaded or installed",
                 ));
                 ui.add_space(6.0);
                 widgets::section(ui, "Rendered");
@@ -1108,6 +1116,32 @@ impl ViewerApp {
         let now = ctx.input(|i| i.time);
         self.toast = Some(Toast { text, until: now + 6.0, error, action: None });
         ctx.request_repaint_after(Duration::from_secs_f32(6.1));
+    }
+
+    /// Once a day, in the background: is a newer release published?
+    fn start_update_check(&mut self) {
+        let today = update::today();
+        if !self.settings.check_updates || self.capture.is_some() || self.settings.last_update_check == today {
+            return;
+        }
+        self.settings.last_update_check = today;
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(update::newer_release());
+        });
+        self.update_rx = Some(rx);
+    }
+
+    fn poll_update(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.update_rx else { return };
+        match rx.try_recv() {
+            Ok(Some(version)) => {
+                self.update_rx = None;
+                self.show_banner(ctx, trf("PolyLoupe {version} is available", &[("version", &version)]), ToastAction::OpenReleases);
+            }
+            Ok(None) | Err(std::sync::mpsc::TryRecvError::Disconnected) => self.update_rx = None,
+            Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_secs(1)),
+        }
     }
 
     fn show_banner(&mut self, ctx: &egui::Context, text: String, action: ToastAction) {
@@ -1850,6 +1884,7 @@ impl eframe::App for ViewerApp {
         }
         self.poll_loading(&ctx);
         self.poll_qa();
+        self.poll_update(&ctx);
         self.poll_compare(&ctx, frame);
         self.poll_turntable(&ctx);
         self.update_environment(&ctx);
