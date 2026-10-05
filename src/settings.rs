@@ -132,7 +132,7 @@ impl Finish {
 
     pub fn description(self) -> &'static str {
         match self {
-            Finish::Off => "The model's own materials",
+            Finish::Off => "Smooth satin plastic, no layer lines",
             Finish::Pla => "FDM, matte, visible layer lines",
             Finish::Petg => "FDM, glossy, visible layer lines",
             Finish::SilkPla => "FDM, satin metallic sheen",
@@ -245,12 +245,13 @@ pub struct Settings {
     /// Pick the workspace from the file type; otherwise `workspace` always.
     pub auto_workspace: bool,
     pub workspace: Workspace,
-    /// Print finish (Manufacturing workspace, Rendered mode), its layer height in millimeters,
-    /// and whether it keeps the model's colors or uses `filament_color` (sRGB).
+    /// Print finish (Manufacturing workspace, Rendered mode) and its layer height in millimeters.
     pub finish: Finish,
     pub layer_height: f32,
-    pub finish_model_colors: bool,
-    pub filament_color: [u8; 3],
+    /// Manufacturing shows every part as plain plastic of `plastic_color` (sRGB; a new name, so an old filament choice no longer applies), ignoring the
+    /// file's materials and textures, unless this is on. 3D Art always uses the file's own.
+    pub file_materials: bool,
+    pub plastic_color: [u8; 3],
 }
 
 impl Default for Settings {
@@ -310,8 +311,8 @@ impl Default for Settings {
             workspace: Workspace::Art,
             finish: Finish::Pla,
             layer_height: 0.2,
-            finish_model_colors: true,
-            filament_color: [232, 232, 228],
+            file_materials: false,
+            plastic_color: [200, 200, 196],
         }
     }
 }

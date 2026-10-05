@@ -109,18 +109,14 @@ impl ViewerApp {
                 if window_button(ui, icons::window_minimize, size, false).clicked() {
                     ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
                 }
-                ui.add_space(12.0);
-                let mut workspace = self.workspace;
-                let tip = tr("Manufacturing: CAD and 3D printing tools, millimeters · 3D Art: textures, UVs, animation");
-                // The segmented control fills the width it gets: give it a fixed one.
-                let options = [(Workspace::Manufacturing, Workspace::Manufacturing.label()), (Workspace::Art, Workspace::Art.label())];
-                ui.allocate_ui_with_layout(vec2(230.0, theme::CONTROL_HEIGHT), Layout::left_to_right(Align::Center), |ui| {
-                    if widgets::segmented(ui, &mut workspace, &options) {
-                        self.set_workspace(workspace);
-                    }
-                })
-                .response
-                .on_hover_text(tip);
+                // Side panel switch, always in the same place at the right edge.
+                ui.add_space(10.0);
+                let open = self.settings.show_sidebar;
+                let panel = widgets::sized_icon_button(ui, icons::panel, open, vec2(36.0, 30.0))
+                    .on_hover_text(tr(if open { "Hide the side panel (N)" } else { "Show the side panel (N)" }));
+                if panel.clicked() {
+                    self.settings.show_sidebar = !open;
+                }
             });
         });
     }
@@ -386,6 +382,19 @@ impl ViewerApp {
             .pivot(Align2::CENTER_TOP)
             .show(ctx, |ui| {
                 toolbar(ui, |ui| {
+                    // Workspace first: it decides which tools and materials the rest offers.
+                    let mut workspace = self.workspace;
+                    let options = [
+                        (Workspace::Manufacturing, icons::manufacturing as icons::IconFn, Workspace::Manufacturing.label()),
+                        (Workspace::Art, icons::art as icons::IconFn, Workspace::Art.label()),
+                    ];
+                    let tip = tr("Workspace\nManufacturing: CAD and 3D printing, millimeters, plain plastic material\n3D Art: textures, UVs, animation, the file's own materials");
+                    let switched = ui.scope(|ui| widgets::segmented_icons(ui, &mut workspace, &options, viewport.width() > 1000.0));
+                    switched.response.on_hover_text(tip);
+                    if switched.inner {
+                        self.set_workspace(workspace);
+                    }
+                    toolbar_separator(ui);
                     let panel_open = self.settings.show_sidebar && self.inspector_tab == InspectorTab::Shading;
                     let s = &mut self.settings;
                     // The three modes and their settings button share one pill, so the button
@@ -439,7 +448,7 @@ impl ViewerApp {
                         s.toggle_xray();
                     }
 
-                    let missing = self.info.as_ref().map_or(0, |i| i.missing.len());
+                    let missing = self.info.as_ref().map_or(0, |i| i.missing.len()).saturating_mul(!self.manufacturing() as usize);
                     if missing > 0 {
                         toolbar_separator(ui);
                         let r = tag(ui, &format!("{missing} !"), true)
@@ -467,11 +476,6 @@ impl ViewerApp {
                         .clicked()
                     {
                         frame = true;
-                    }
-                    let r = widgets::sized_icon_button(ui, icons::panel, self.settings.show_sidebar, Vec2::splat(theme::TOOLBAR_HEIGHT))
-                        .on_hover_text(tr("Inspector (N)"));
-                    if r.clicked() {
-                        self.settings.show_sidebar = !self.settings.show_sidebar;
                     }
                 });
             });
@@ -894,12 +898,12 @@ impl ViewerApp {
         ui.horizontal(|ui| {
             ui.add_space(8.0);
             ui.spacing_mut().item_spacing.x = 4.0;
-            let tabs = [
-                (InspectorTab::Info, "Info"),
-                (InspectorTab::Shading, "Shading"),
-                (InspectorTab::Materials, "Materials"),
-                (InspectorTab::Scene, "Scene"),
-            ];
+            // Manufacturing ignores the file's materials and textures, so it has no tab for them.
+            let mut tabs = vec![(InspectorTab::Info, "Info"), (InspectorTab::Shading, "Shading")];
+            if !self.manufacturing() {
+                tabs.push((InspectorTab::Materials, "Materials"));
+            }
+            tabs.push((InspectorTab::Scene, "Scene"));
             let width = ((ui.available_width() - 8.0 - 8.0 - 4.0 * (tabs.len() - 1) as f32) / tabs.len() as f32).floor();
             for (tab, label) in tabs {
                 let selected = self.inspector_tab == tab;
@@ -965,6 +969,11 @@ impl ViewerApp {
         ui.painter().hline(ui.max_rect().x_range(), ui.cursor().top(), Stroke::new(1.0, theme::BORDER));
         ui.add_space(6.0);
         let manufacturing = self.manufacturing();
+        if manufacturing && self.settings.shading != ShadingMode::Wireframe {
+            popovers::part_material(ui, &mut self.settings);
+            ui.add_space(4.0);
+            ui.separator();
+        }
         let action = popovers::shading(ui, &mut self.settings, &mut self.thumbs, manufacturing);
         if let Some(a) = action {
             self.apply_popover_action(a);

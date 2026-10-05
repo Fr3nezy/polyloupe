@@ -31,11 +31,12 @@ struct Globals {
     // x: normal line length (world units, 0 = off), y: 1 for the face orientation overlay.
     normals: vec4<f32>,
     // x: 1 when the interface calls Y up: world Y lines are drawn blue (Z) and world Z green (Y).
+    // y: 1 for the neutral plastic material (Manufacturing): the file's materials are ignored.
     display: vec4<f32>,
     // Print finish (Rendered mode): x finish id (0 off), y layer height in world units,
-    // z 1 to keep the model's colors, w world units per millimeter.
+    // w world units per millimeter.
     finish: vec4<f32>,
-    // Filament color, linear RGB.
+    // Neutral plastic color, linear RGB.
     finish_color: vec4<f32>,
 };
 

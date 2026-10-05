@@ -329,6 +329,27 @@ pub fn cube_line(p: &Painter, rect: Rect, color: Color32) {
     p.line_segment([g(7.0, 7.1), g(7.0, 12.5)], s);
 }
 
+/// Manufacturing workspace: a hex nut.
+pub fn manufacturing(p: &Painter, rect: Rect, color: Color32) {
+    let g = grid(rect, 16.0);
+    let s = stroke_for(rect, 16.0, 1.4, color);
+    let k = rect.width().min(rect.height()) / 16.0;
+    polyline(p, vec![g(8.0, 1.5), g(14.0, 4.75), g(14.0, 11.25), g(8.0, 14.5), g(2.0, 11.25), g(2.0, 4.75)], true, s);
+    p.circle_stroke(g(8.0, 8.0), 2.6 * k, s);
+}
+
+/// 3D Art workspace: a paint palette with three color dots.
+pub fn art(p: &Painter, rect: Rect, color: Color32) {
+    let g = grid(rect, 16.0);
+    let s = stroke_for(rect, 16.0, 1.4, color);
+    let k = rect.width().min(rect.height()) / 16.0;
+    p.add(Shape::closed_line(ellipse(g(8.0, 8.2), vec2(6.6 * k, 5.8 * k), 32), s));
+    for (x, y) in [(5.0, 7.0), (8.0, 5.2), (11.0, 7.0)] {
+        p.circle_filled(g(x, y), 1.1 * k, color);
+    }
+    p.circle_stroke(g(9.2, 10.6), 1.5 * k, s);
+}
+
 /// Warning triangle.
 pub fn warning(p: &Painter, rect: Rect, color: Color32) {
     let g = grid(rect, 16.0);

@@ -136,7 +136,7 @@ pub fn shading(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails, manufactu
         ui.separator();
     }
     match s.shading {
-        ShadingMode::Solid => solid(ui, s, thumbs),
+        ShadingMode::Solid => solid(ui, s, thumbs, manufacturing),
         ShadingMode::Wireframe => {
             widgets::section(ui, "Wireframe Color");
             let mut random = s.color == ColorMode::Random;
@@ -164,6 +164,23 @@ pub fn shading(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails, manufactu
     action
 }
 
+/// What a part is made of on screen (Manufacturing): plain plastic of one color, or the
+/// materials the file carries. The choice applies to Solid and Rendered.
+pub fn part_material(ui: &mut Ui, s: &mut Settings) {
+    widgets::section(ui, "Part Material");
+    ui.horizontal(|ui| {
+        widgets::segmented(ui, &mut s.file_materials, &[(false, "Plastic"), (true, "File materials")]);
+    });
+    if s.file_materials {
+        ui.label(RichText::new(tr("The colors and materials stored in the file")).size(11.0).color(theme::TEXT_DIM));
+    } else {
+        ui.horizontal(|ui| {
+            ui.color_edit_button_srgb(&mut s.plastic_color);
+            ui.label(RichText::new(tr("Satin plastic, the file's materials are ignored")).size(11.0).color(theme::TEXT_DIM));
+        });
+    }
+}
+
 /// Print finish for quick renders of a part: material, layer height, filament color.
 fn print_finish(ui: &mut Ui, s: &mut Settings) {
     widgets::section(ui, "Print Finish");
@@ -181,13 +198,6 @@ fn print_finish(ui: &mut Ui, s: &mut Settings) {
     }
     ui.add(egui::Slider::new(&mut s.layer_height, 0.02..=0.6).step_by(0.01).suffix(" mm").text(tr("Layer height")))
         .on_hover_text(tr("Layer lines run along Z: lay the part on a face to change the print direction"));
-    ui.horizontal(|ui| {
-        ui.checkbox(&mut s.finish_model_colors, tr("Model colors"));
-        ui.add_enabled_ui(!s.finish_model_colors, |ui| {
-            ui.color_edit_button_srgb(&mut s.filament_color);
-            ui.label(RichText::new(tr("Filament")).color(theme::TEXT_DIM));
-        });
-    });
 }
 
 /// Checkbox with the marker color as a swatch after the label.
@@ -201,7 +211,7 @@ pub fn marker_toggle(ui: &mut Ui, value: &mut bool, label: &str, color: Color32)
     .inner
 }
 
-fn solid(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails) {
+fn solid(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails, manufacturing: bool) {
     widgets::section(ui, "Lighting");
     ui.horizontal(|ui| {
         widgets::segmented(
@@ -223,15 +233,18 @@ fn solid(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails) {
             &[(ColorMode::Material, "Material"), (ColorMode::Single, "Single"), (ColorMode::Random, "Random")],
         )
     });
-    ui.horizontal(|ui| {
-        widgets::segmented(
-            ui,
-            &mut s.color,
-            &[(ColorMode::Texture, "Texture"), (ColorMode::Attribute, "Attribute")],
-        )
-    })
-    .response
-    .on_hover_text(tr("Texture: image maps and their passes · Attribute: vertex colors"));
+    // Image maps and vertex colors belong to 3D Art; Manufacturing has neither.
+    if !manufacturing {
+        ui.horizontal(|ui| {
+            widgets::segmented(
+                ui,
+                &mut s.color,
+                &[(ColorMode::Texture, "Texture"), (ColorMode::Attribute, "Attribute")],
+            )
+        })
+        .response
+        .on_hover_text(tr("Texture: image maps and their passes · Attribute: vertex colors"));
+    }
     match s.color {
         ColorMode::Single => {
             ui.horizontal(|ui| {

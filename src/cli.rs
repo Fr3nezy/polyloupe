@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use crate::camera::AxisView;
 use crate::render::environment::Preset;
-use crate::settings::{ColorMode, Environment, Lighting, Settings, ShadingMode, TexturePass};
+use crate::settings::{ColorMode, Environment, Lighting, Settings, ShadingMode, TexturePass, Workspace};
 
 #[derive(Default)]
 pub struct LaunchOptions {
@@ -87,6 +87,11 @@ impl CaptureOptions {
                         _ => ColorMode::Material,
                     }
                 }
+                "--workspace" => {
+                    s.auto_workspace = false;
+                    s.workspace = if v.starts_with('m') { Workspace::Manufacturing } else { Workspace::Art };
+                }
+                "--file-materials" => s.file_materials = true,
                 "--matcap" => s.matcap = v.parse().unwrap_or(0),
                 "--pass" => {
                     s.color = ColorMode::Texture;
@@ -238,12 +243,12 @@ pub fn parse() -> Result<LaunchOptions, String> {
                 let (x, y) = v.split_once(',').ok_or("--click expects X,Y")?;
                 capture.click = Some([x.parse().map_err(|_| "bad --click x")?, y.parse().map_err(|_| "bad --click y")?]);
             }
-            "--shading" | "--lighting" | "--color" | "--matcap" | "--pass" | "--env" => {
+            "--shading" | "--lighting" | "--color" | "--matcap" | "--pass" | "--env" | "--workspace" => {
                 let v = value(&arg)?;
                 capture.settings.push((arg, Some(v)));
             }
             "--xray" | "--no-xray" | "--wire-overlay" | "--no-grid" | "--fps" | "--env-bg" | "--sidebar"
-            | "--no-outline" | "--mesh-check" | "--normals" | "--face-orientation" | "--origins" => capture.settings.push((arg, None)),
+            | "--file-materials" | "--no-outline" | "--mesh-check" | "--normals" | "--face-orientation" | "--origins" => capture.settings.push((arg, None)),
             flag if flag.starts_with("--") => return Err(format!("unknown option {flag}")),
             _ => opts.open = Some(PathBuf::from(arg)),
         }

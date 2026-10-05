@@ -211,7 +211,7 @@ fn noise3(p: vec3<f32>) -> f32 {
 // `pos_fw`: fwidth of the world position, taken where control flow is still uniform.
 fn print_finish(p: vec3<f32>, pos_fw: vec3<f32>, n_in: vec3<f32>, model: vec3<f32>) -> Finish {
     var out: Finish;
-    out.albedo = select(g.finish_color.rgb, model, g.finish.z > 0.5);
+    out.albedo = model;
     out.metallic = 0.0;
     out.rough = 0.5;
     out.ao = 1.0;
@@ -288,10 +288,15 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     let override_pass = obj.info.w;
     let show_pass = override_pass > 0u || (mode == 1u && cmode == 3u);
     let tex_pass = select(g.extra.x, override_pass - 1u, override_pass > 0u);
-    let material_inputs = mode == 2u || show_pass;
+    // Manufacturing: plain plastic, the file's maps, vertex colors and alpha are left out.
+    let neutral = g.display.y > 0.5;
+    let material_inputs = (mode == 2u || show_pass) && !neutral;
     let textured = material_inputs && has(HAS_UV);
 
     var base = mat.base_color;
+    if neutral {
+        base = vec4<f32>(g.finish_color.rgb, 1.0);
+    }
     if textured && mat_has(1u) {
         base *= textureSampleGrad(base_tex, mat_samp, in.uv, dx, dy);
     }
@@ -310,10 +315,10 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         n = normalize(t * tn.x + b * tn.y + n * tn.z);
     }
 
-    var metallic = mat.pbr.x;
-    var rough = mat.pbr.y;
+    var metallic = select(mat.pbr.x, 0.0, neutral);
+    var rough = select(mat.pbr.y, 0.5, neutral);
     var ao = 1.0;
-    var emissive = mat.emissive.rgb;
+    var emissive = select(mat.emissive.rgb, vec3<f32>(0.0), neutral);
     if textured {
         if mat_has(4u) {
             metallic *= pick(textureSampleGrad(metallic_tex, mat_samp, in.uv, dx, dy), mat.channels.x);

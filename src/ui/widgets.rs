@@ -187,6 +187,49 @@ pub fn segmented<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T,
 }
 
 
+/// Pill of mutually exclusive buttons with an icon and, when `labels` is on, a name next to it
+/// (the viewport toolbar's workspace switch). Returns true when the value changed.
+pub fn segmented_icons<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T, IconFn, &str)], labels: bool) -> bool {
+    let font = egui::FontId::proportional(13.0);
+    let mut clicked = None;
+    Frame::new()
+        .fill(theme::BG_APP)
+        .stroke(Stroke::new(1.0, theme::BORDER))
+        .corner_radius(radius())
+        .inner_margin(Margin::same(1))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.horizontal(|ui| {
+                for (opt, icon, label) in options {
+                    let text_w = if labels { ui.painter().layout_no_wrap(tr(label).to_string(), font.clone(), theme::TEXT).size().x + 6.0 } else { 0.0 };
+                    let size = Vec2::new(theme::TOOLBAR_HEIGHT - 4.0 + text_w + if labels { 10.0 } else { 0.0 }, theme::TOOLBAR_HEIGHT - 4.0);
+                    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+                    let selected = *opt == *value;
+                    let (fill, fg) = colors(selected, response.hovered(), response.is_pointer_button_down_on());
+                    let fg = if selected || response.hovered() { fg } else { theme::TEXT_DIM };
+                    ui.painter().rect_filled(rect, CornerRadius::same(theme::RADIUS - 1), fill);
+                    let side = (size.y * 0.6).min(20.0);
+                    let icon_center = if labels { egui::pos2(rect.left() + 5.0 + side * 0.5 + 4.0, rect.center().y) } else { rect.center() };
+                    icon(ui.painter(), Rect::from_center_size(icon_center, Vec2::splat(side)), fg);
+                    if labels {
+                        ui.painter().text(egui::pos2(icon_center.x + side * 0.5 + 6.0, rect.center().y), egui::Align2::LEFT_CENTER, tr(label), font.clone(), fg);
+                    }
+                    focus_ring(ui, rect, &response);
+                    if response.clicked() {
+                        clicked = Some(*opt);
+                    }
+                }
+            });
+        });
+    match clicked {
+        Some(o) if o != *value => {
+            *value = o;
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Section title: monospace, uppercase, tracked out, dim.
 pub fn section(ui: &mut Ui, title: &str) {
     ui.add_space(4.0);

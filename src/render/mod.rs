@@ -257,7 +257,7 @@ pub struct Renderer {
     pass_overrides: Vec<u32>,
     /// The user's move per object (Move tool), applied on top of the file's placement.
     user_transforms: Vec<Mat4>,
-    objects_key: Option<(ColorMode, [u8; 3])>,
+    objects_key: Option<(ColorMode, [u8; 3], Option<[u8; 3]>)>,
     objects_dirty: bool,
     /// Result of the last pick request: `Some(None)` means "clicked empty space".
     pub picked: Option<Option<usize>>,
@@ -815,19 +815,21 @@ impl Renderer {
         }
     }
 
-    fn write_objects(&mut self, settings: &Settings) {
-        let key = (settings.color, settings.single_color);
+    fn write_objects(&mut self, settings: &Settings, neutral: bool) {
+        let key = (settings.color, settings.single_color, neutral.then_some(settings.plastic_color));
         if (self.objects_key == Some(key) && !self.objects_dirty) || self.objects.is_empty() {
             return;
         }
         self.objects_key = Some(key);
         self.objects_dirty = false;
         let single = srgb_to_linear(settings.single_color);
+        let plastic = srgb_to_linear(settings.plastic_color);
         let mut bytes = vec![0u8; self.objects.len() * self.object_stride as usize];
         for (i, o) in self.objects.iter().enumerate() {
             let color = match settings.color {
                 ColorMode::Single => [single[0], single[1], single[2], 1.0],
                 ColorMode::Random => [o.random_color[0], o.random_color[1], o.random_color[2], 1.0],
+                _ if neutral => [plastic[0], plastic[1], plastic[2], 1.0],
                 _ => o.material_color,
             };
             let sel = match self.selection.get(i) {
@@ -991,7 +993,10 @@ impl Renderer {
             write_matcap(&self.queue, &self.matcap_tex, s.matcap);
             self.matcap_loaded = s.matcap;
         }
-        self.write_objects(s);
+        // Manufacturing (the print scale applies) shows plain plastic unless the file's own
+        // materials are asked for.
+        let neutral = input.print_scale > 0.0 && !s.file_materials;
+        self.write_objects(s, neutral);
 
         let xray = s.xray();
         let wire_mode = s.shading == ShadingMode::Wireframe;
@@ -1053,19 +1058,14 @@ impl Renderer {
             markers: [s.show_non_manifold as u32, s.show_open_edges as u32, s.show_overlapping as u32, 0],
             section: input.section.unwrap_or([0.0; 4]),
             normals: [if s.show_normals { input.normal_length } else { 0.0 }, s.show_face_orientation as u32 as f32, 0.0, 0.0],
-            display: [(s.up_axis == crate::axes::UpAxis::Y) as u32 as f32, 0.0, 0.0, 0.0],
+            display: [(s.up_axis == crate::axes::UpAxis::Y) as u32 as f32, neutral as u32 as f32, 0.0, 0.0],
             finish: if rendered && input.print_scale > 0.0 {
-                [
-                    s.finish.shader_id() as f32,
-                    s.layer_height.max(0.01) * input.print_scale,
-                    s.finish_model_colors as u32 as f32,
-                    input.print_scale,
-                ]
+                [s.finish.shader_id() as f32, s.layer_height.max(0.01) * input.print_scale, 0.0, input.print_scale]
             } else {
                 [0.0; 4]
             },
             finish_color: {
-                let c = srgb_to_linear(s.filament_color);
+                let c = srgb_to_linear(s.plastic_color);
                 [c[0], c[1], c[2], 1.0]
             },
         };

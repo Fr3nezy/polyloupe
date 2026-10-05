@@ -196,14 +196,21 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Model saved: {name}" => "Modello salvato: {name}",
         "Manufacturing" => "Manifattura",
         "3D Art" => "3D Art",
-        "Manufacturing: CAD and 3D printing tools, millimeters · 3D Art: textures, UVs, animation" => {
-            "Manifattura: strumenti per CAD e stampa 3D, millimetri · 3D Art: texture, UV, animazione"
+        "Workspace\nManufacturing: CAD and 3D printing, millimeters, plain plastic material\n3D Art: textures, UVs, animation, the file's own materials" => {
+            "Area di lavoro\nManifattura: CAD e stampa 3D, millimetri, materiale plastica neutra\n3D Art: texture, UV, animazione, i materiali del file"
         }
+        "Hide the side panel (N)" => "Nascondi il pannello laterale (N)",
+        "Show the side panel (N)" => "Mostra il pannello laterale (N)",
+        "Part Material" => "Materiale del pezzo",
+        "Plastic" => "Plastica",
+        "File materials" => "Materiali del file",
+        "The colors and materials stored in the file" => "I colori e i materiali salvati nel file",
+        "Satin plastic, the file's materials are ignored" => "Plastica satinata, i materiali del file sono ignorati",
+        "Smooth satin plastic, no layer lines" => "Plastica satinata liscia, senza layer",
         "Not stored (mm)" => "Non salvate (mm)",
         "Print Finish" => "Finitura di stampa",
         "Resin" => "Resina",
         "Metal SLM" => "Metallo SLM",
-        "The model's own materials" => "I materiali del modello",
         "FDM, matte, visible layer lines" => "FDM, opaco, layer visibili",
         "FDM, glossy, visible layer lines" => "FDM, lucido, layer visibili",
         "FDM, satin metallic sheen" => "FDM, riflesso satinato metallico",
@@ -214,8 +221,6 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Layer lines run along Z: lay the part on a face to change the print direction" => {
             "I layer seguono l'asse Z: appoggia il pezzo su una faccia per cambiare la direzione di stampa"
         }
-        "Model colors" => "Colori del modello",
-        "Filament" => "Filamento",
         "Click the face that goes on the bed · Esc to cancel" => "Clicca la faccia da appoggiare sul piano · Esc per annullare",
         "This face goes on the bed" => "Questa faccia va sul piano",
         "Pick the workspace from the file type" => "Scegli l'area di lavoro dal tipo di file",

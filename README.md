@@ -32,11 +32,12 @@ this repository by `scripts/build-installer.ps1`, and its SHA-256 is listed in t
   STEP files go through [OpenCASCADE](https://dev.opencascade.org/) with assembly parts, names and
   colors; the CAD kernel lives in its own DLL, loaded only when a STEP file is opened, and the
   meshed result is cached so the same file opens in a moment the next time.
-- Two workspaces, picked from the file type (switch in the title bar):
+- Two workspaces, picked from the file type (switch in the viewport toolbar):
   - Manufacturing (STL, 3MF, STEP, PLY): millimeters, a Move tool (W) with a transform gizmo,
     Lay on face, Auto orient and Drop to bed for print orientation, Export Model to STL or 3MF,
     and print finishes for quick renders (PLA, PETG, Silk PLA, resin, nylon SLS, metal SLM) with
-    layer lines that follow the bed.
+    layer lines that follow the bed. Parts show as plain satin plastic (a light grey you can change)
+    and ignore the file's materials and textures, unless you pick "File materials" in Shading.
   - 3D Art (glTF, FBX, OBJ, DAE): textures, UVs, channels and animation, in meters like Blender.
 - Explorer thumbnails for all of them (rendered by a small self-contained handler, like Blender's
   for .blend files), plus "Open with" and Default apps entries.
@@ -93,7 +94,7 @@ Blender's by default (the mouse part changes with the navigation preset):
 | LMB / Shift+LMB | Select / extend selection |
 | A / Alt+A | Select all / none |
 | H / Shift+H / Alt+H | Hide selected / hide others / reveal |
-| N | Inspector |
+| N | Side panel (also the button at the top right) |
 | Home / `.` | Frame all / frame selected |
 | 1 / 3 / 7 (Ctrl for opposite) | Front / Right / Top view |
 | 2 4 6 8 | Orbit in 15° steps |
@@ -171,7 +172,7 @@ cargo run --release -- model.glb --capture out.png --size 1280x800 --shading ren
 Flags: `--shading wireframe|solid|rendered`, `--lighting studio|matcap|flat`,
 `--color material|single|random|texture|attribute`, `--pass basecolor|roughness|metallic|normal|ao|emission|alpha|uvgrid`,
 `--matcap N`, `--env forest|studio|sunset|PATH.hdr|PATH.exr`, `--env-bg`, `--xray`, `--wire-overlay`,
-`--no-grid`, `--no-outline`, `--view front|back|right|left|top|bottom`, `--ortho`,
+`--workspace manufacturing|art`, `--file-materials`, `--no-grid`, `--no-outline`, `--view front|back|right|left|top|bottom`, `--ortho`,
 `--popover shading|overlays|channel|preferences|welcome`, `--nav blender|maya|zbrush|max|gameengine|cad`, `--pie`, `--sidebar`, `--select N`, `--click X,Y`,
 `--channel PASS` (on the selection), `--clip N`, `--frame N`, `--fps`, `--popover preferences`.
 `--export OUT.png [--export-scale 1|2|4] [--transparent]` runs File > Export Image instead of a

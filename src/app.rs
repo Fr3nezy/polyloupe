@@ -806,7 +806,8 @@ impl ViewerApp {
         self.uv_view.reset();
         self.visible = vec![true; n];
         self.pass_override = vec![None; n];
-        let missing_count = info.missing.len();
+        // Manufacturing ignores the file's textures, so missing ones aren't news.
+        let missing_count = if self.manufacturing() { 0 } else { info.missing.len() };
         self.info = Some(info);
         self.apply_workspace();
         self.settings.push_recent(&path.to_string_lossy());
@@ -866,8 +867,12 @@ impl ViewerApp {
         if manufacturing {
             self.uv_view.open = false;
             self.pass_override.fill(None);
-            if self.settings.color == ColorMode::Texture {
+            // Texture and Attribute (vertex colors) are 3D Art channels.
+            if matches!(self.settings.color, ColorMode::Texture | ColorMode::Attribute) {
                 self.settings.color = ColorMode::Material;
+            }
+            if self.inspector_tab == InspectorTab::Materials {
+                self.inspector_tab = InspectorTab::Info;
             }
         } else if self.tool == Tool::Move {
             self.tool = Tool::Select;
