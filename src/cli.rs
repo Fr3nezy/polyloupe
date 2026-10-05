@@ -138,6 +138,7 @@ impl CaptureOptions {
                 }
                 "--wire-overlay" => s.show_wire_overlay = true,
                 "--no-grid" => s.show_grid = false,
+                "--no-overlays" => s.show_overlays = false,
                 "--fps" => {
                     s.show_fps = true;
                     s.vsync = false;
@@ -248,7 +249,7 @@ pub fn parse() -> Result<LaunchOptions, String> {
                 capture.settings.push((arg, Some(v)));
             }
             "--xray" | "--no-xray" | "--wire-overlay" | "--no-grid" | "--fps" | "--env-bg" | "--sidebar"
-            | "--file-materials" | "--no-outline" | "--mesh-check" | "--normals" | "--face-orientation" | "--origins" => capture.settings.push((arg, None)),
+            | "--file-materials" | "--no-overlays" | "--no-outline" | "--mesh-check" | "--normals" | "--face-orientation" | "--origins" => capture.settings.push((arg, None)),
             flag if flag.starts_with("--") => return Err(format!("unknown option {flag}")),
             _ => opts.open = Some(PathBuf::from(arg)),
         }

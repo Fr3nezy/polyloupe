@@ -401,7 +401,8 @@ impl ViewerApp {
     }
 
     pub(super) fn draw_transform_gizmo(&self, ui: &Ui, viewport: Rect) {
-        if self.tool != Tool::Move || !self.settings.show_overlays {
+        // The overlays switch hides the grid and markers, not the tool being used.
+        if self.tool != Tool::Move {
             return;
         }
         if self.lay_face_armed {
