@@ -1,6 +1,6 @@
 [package]
 name = "polyloupe-step"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 description = "STEP reader for PolyLoupe: OpenCASCADE in a DLL loaded only when a STEP file is opened"
 license = "GPL-3.0-or-later"

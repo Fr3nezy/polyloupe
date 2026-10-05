@@ -9,7 +9,7 @@
 ; own inside Windows' isolated thumbnail process, with no GPU; .gltf and .obj go through a second
 ; class that gets the file's path and runs polyloupe.exe --thumbnail (see thumbnailer/src/lib.rs).
 
-#define AppVersion "0.1.2"
+#define AppVersion "0.2.0"
 
 [Setup]
 AppId={{24342D06-700F-425F-BDEF-C297766C9278}
