@@ -882,7 +882,7 @@ impl ViewerApp {
             if self.inspector_tab == InspectorTab::Materials {
                 self.inspector_tab = InspectorTab::Info;
             }
-        } else if self.tool == Tool::Move {
+        } else if self.tool.transforms() {
             self.tool = Tool::Select;
         }
     }
@@ -1247,8 +1247,17 @@ impl ViewerApp {
         }
         let pressed = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
         self.transform_shortcuts(ctx);
-        for (key, tool) in [(Key::Q, Tool::Select), (Key::O, Tool::Orbit), (Key::G, Tool::Pan), (Key::M, Tool::Measure), (Key::W, Tool::Move)] {
-            if pressed(Modifiers::NONE, key) && (tool != Tool::Move || self.manufacturing()) {
+        let keys = [
+            (Key::Q, Tool::Select),
+            (Key::O, Tool::Orbit),
+            (Key::G, Tool::Pan),
+            (Key::M, Tool::Measure),
+            (Key::W, Tool::Move),
+            (Key::E, Tool::Rotate),
+            (Key::R, Tool::Scale),
+        ];
+        for (key, tool) in keys {
+            if pressed(Modifiers::NONE, key) && (!tool.transforms() || self.manufacturing()) {
                 self.tool = tool;
             }
         }
@@ -1422,7 +1431,7 @@ impl ViewerApp {
             Tool::Orbit => Some(Gesture::Orbit),
             Tool::Pan => Some(Gesture::Pan),
             Tool::Zoom => Some(Gesture::Zoom),
-            Tool::Measure | Tool::Section | Tool::Move => None,
+            Tool::Measure | Tool::Section | Tool::Move | Tool::Rotate | Tool::Scale => None,
         };
         // Section tool: a left drag slides the plane along its axis, following the axis
         // direction on screen.
@@ -1487,14 +1496,14 @@ impl ViewerApp {
             if let Some(pos) = response.interact_pointer_pos() {
                 let purpose = if self.tool == Tool::Measure {
                     PickPurpose::MeasureClick { free: mods.ctrl }
-                } else if self.tool == Tool::Move && self.lay_face_armed {
+                } else if self.tool.transforms() && self.lay_face_armed {
                     PickPurpose::LayFace
                 } else {
                     PickPurpose::Select { extend: mods.shift }
                 };
                 self.pending_pick = Some((to_px(pos), purpose));
             }
-        } else if self.tool == Tool::Move && self.lay_face_armed && self.info.is_some() && self.pending_pick.is_none() {
+        } else if self.tool.transforms() && self.lay_face_armed && self.info.is_some() && self.pending_pick.is_none() {
             // A --lay capture has no real pointer: keep its simulated one.
             let simulated = self.capture.as_ref().is_some_and(|c| c.opts.lay_hover.is_some());
             let hover = if simulated { self.lay_hover_px } else { response.hover_pos().map(to_px) };
@@ -1516,7 +1525,7 @@ impl ViewerApp {
                 }
             }
         }
-        if (self.tool == Tool::Measure || (self.tool == Tool::Move && self.lay_face_armed)) && response.hovered() {
+        if (self.tool == Tool::Measure || (self.tool.transforms() && self.lay_face_armed)) && response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         }
     }
@@ -1775,8 +1784,11 @@ impl ViewerApp {
             if cap.opts.pie {
                 self.pie.open(ctx.content_rect().center(), ctx.input(|i| i.time));
             }
-            if cap.opts.tool_move {
-                self.tool = Tool::Move;
+            match cap.opts.tool.as_deref() {
+                Some("move") => self.tool = Tool::Move,
+                Some("rotate") => self.tool = Tool::Rotate,
+                Some("scale") => self.tool = Tool::Scale,
+                _ => {}
             }
             if cap.opts.uv {
                 self.uv_view.open = true;

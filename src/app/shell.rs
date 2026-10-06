@@ -28,8 +28,17 @@ pub(super) enum Tool {
     Measure,
     /// Drag to slide the section plane.
     Section,
-    /// Gizmo to move and rotate objects, lay them on a face, export the result.
+    /// Gizmos to move, rotate and scale objects (Manufacturing), with lay on face and export.
     Move,
+    Rotate,
+    Scale,
+}
+
+impl Tool {
+    /// One of the gizmo tools.
+    pub(super) fn transforms(self) -> bool {
+        matches!(self, Tool::Move | Tool::Rotate | Tool::Scale)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -342,22 +351,39 @@ impl ViewerApp {
         ui.vertical_centered(|ui| {
             ui.add_space(8.0);
             ui.spacing_mut().item_spacing.y = 4.0;
-            for (tool, icon, tip) in [
-                (Tool::Select, icons::cursor as icons::IconFn, "Select (Q)"),
-                (Tool::Orbit, icons::orbit, "Orbit (O)"),
-                (Tool::Pan, icons::move_arrows, "Pan (G)"),
-                (Tool::Zoom, icons::magnifier, "Zoom (drag up/down)"),
-                (Tool::Move, icons::transform, "Move and rotate (W)"),
+            // Two groups, like Blender's toolbar and its navigation controls: what the left button
+            // does to the model, then camera moves.
+            let tools: [(Tool, icons::IconFn, &str); 6] = [
+                (Tool::Select, icons::cursor, "Select (Q)"),
+                (Tool::Move, icons::move_arrows, "Move (W)"),
+                (Tool::Rotate, icons::rotate, "Rotate (E)"),
+                (Tool::Scale, icons::scale, "Scale (R)"),
                 (Tool::Measure, icons::ruler, "Measure (M)"),
                 (Tool::Section, icons::section, "Section"),
-            ] {
-                if tool == Tool::Move && !self.manufacturing() {
-                    continue;
+            ];
+            let navigation: [(Tool, icons::IconFn, &str); 3] = [
+                (Tool::Orbit, icons::orbit, "Orbit (O)"),
+                (Tool::Pan, icons::hand, "Pan (G)"),
+                (Tool::Zoom, icons::magnifier, "Zoom (drag up/down)"),
+            ];
+            for (group, items) in [("Tools", &tools[..]), ("View", &navigation[..])] {
+                if group == "View" {
+                    ui.add_space(6.0);
+                    let (line, _) = ui.allocate_exact_size(vec2(28.0, 1.0), Sense::hover());
+                    ui.painter().hline(line.x_range(), line.center().y, Stroke::new(1.0, theme::BORDER));
+                    ui.add_space(6.0);
                 }
-                if tool_button(ui, icon, self.tool == tool).on_hover_text(tr(tip)).clicked() {
-                    self.tool = tool;
-                    if tool == Tool::Section && self.section.is_none() {
-                        self.section = Some(Section::default());
+                let (caption, _) = ui.allocate_exact_size(vec2(RAIL_WIDTH - 8.0, 14.0), Sense::hover());
+                ui.painter().text(caption.center(), Align2::CENTER_CENTER, tr(group).to_uppercase(), theme::mono(8.5), theme::TEXT_FAINT);
+                for &(tool, icon, tip) in items {
+                    if tool.transforms() && !self.manufacturing() {
+                        continue;
+                    }
+                    if tool_button(ui, icon, self.tool == tool).on_hover_text(tr(tip)).clicked() {
+                        self.tool = tool;
+                        if tool == Tool::Section && self.section.is_none() {
+                            self.section = Some(Section::default());
+                        }
                     }
                 }
             }
@@ -1429,12 +1455,16 @@ impl ViewerApp {
                     widgets::hint(ui, keys, action);
                 }
                 widgets::hint(ui, &["Q"], "Back to select");
-            } else if self.info.is_some() && self.tool == Tool::Move {
+            } else if self.info.is_some() && self.tool.transforms() {
                 if self.lay_face_armed {
                     widgets::hint(ui, &["LMB"], "Face to lay on the bed");
                     widgets::hint(ui, &["Esc"], "Cancel");
                 } else {
-                    widgets::hint(ui, &["LMB"], "Drag arrows, rings or center");
+                    widgets::hint(ui, &["LMB"], match self.tool {
+                        Tool::Rotate => "Drag a ring",
+                        Tool::Scale => "Drag a handle, or the center for all axes",
+                        _ => "Drag an arrow, or the center",
+                    });
                     widgets::hint(ui, &["Ctrl"], "Snap");
                     widgets::hint(ui, &["L"], "Lay on face");
                     widgets::hint(ui, &["B"], "Drop to bed");

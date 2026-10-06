@@ -50,7 +50,7 @@ pub struct CaptureOptions {
     pub frame: Option<i32>,
     /// Move tool: switch to it, rotate the selection (degrees about X, Y, Z), lay it on its
     /// best side, and save the result as STL/3MF.
-    pub tool_move: bool,
+    pub tool: Option<String>,
     pub rotate: Option<[f32; 3]>,
     pub auto_orient: bool,
     pub export_model: Option<PathBuf>,
@@ -187,7 +187,7 @@ pub fn parse() -> Result<LaunchOptions, String> {
             "--select" => capture.select = value("--select")?.parse().ok(),
             "--clip" => capture.clip = value("--clip")?.parse().ok(),
             "--frame" => capture.frame = value("--frame")?.parse().ok(),
-            "--tool" => capture.tool_move = value("--tool")? == "move",
+            "--tool" => capture.tool = Some(value("--tool")?),
             "--rotate" => {
                 let v: Vec<f32> = value("--rotate")?.split(',').filter_map(|x| x.trim().parse().ok()).collect();
                 let [x, y, z] = v[..] else { return Err("--rotate expects X,Y,Z degrees".into()) };

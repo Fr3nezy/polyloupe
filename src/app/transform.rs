@@ -1,6 +1,7 @@
-//! Move tool: a Blender-style transform gizmo (arrows move along an axis, rings rotate around
-//! it, the center dot moves in the view plane), laying an object on a face for printing, and
-//! exporting the moved model as STL or 3MF.
+//! Move, Rotate and Scale tools: Blender-style gizmos (arrows move along an axis and the center
+//! in the view plane, rings rotate around an axis, square handles scale along an axis and the
+//! center uniformly), laying an object on a face for printing, and exporting the result as STL
+//! or 3MF.
 //!
 //! Each object keeps a user transform applied on top of the file's placement. The file itself is
 //! never touched; File > Export Model writes a new one.
@@ -15,30 +16,43 @@ use crate::ui::widgets::{text_button, toolbar, toolbar_separator};
 
 /// Gizmo arrow length and ring radius, in points.
 const ARROW_LEN: f32 = 90.0;
-const RING_RADIUS: f32 = 62.0;
+const RING_RADIUS: f32 = 70.0;
 const CENTER_RADIUS: f32 = 9.0;
 /// How close (points) the pointer must be to grab a handle.
 const GRAB: f32 = 7.0;
+/// Ctrl snapping for rotation and scale.
+const ANGLE_STEP: f32 = 15.0;
+const SCALE_STEP: f32 = 0.1;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum Handle {
-    /// Move along world axis 0..2.
+    /// Move or scale along world axis 0..2.
     Axis(usize),
     /// Rotate around world axis 0..2.
     Ring(usize),
-    /// Move in the view plane.
+    /// Move in the view plane, or scale uniformly.
     Center,
 }
 
+/// A drag in progress. Everything the drag measures against is frozen when it starts: the
+/// pivot, the gizmo's screen position and scale, the axes on screen. Measuring against the live
+/// bounds made a rotation feed back into itself (the box changes as the model turns, so the
+/// center moves, so the angle changes again) and spin.
 pub(super) struct Drag {
     handle: Handle,
     pivot: Vec3,
+    center: Pos2,
+    world_per_point: f32,
+    arrows: [Option<Pos2>; 3],
     /// User transforms when the drag started (undo snapshot).
     start: Vec<Mat4>,
     start_pointer: Pos2,
-    /// Angle accumulated by a ring drag, unwrapped across ±π.
-    angle: f32,
+    /// Angle swept by a ring drag, unwrapped across ±π.
+    swept: f32,
     last_angle: f32,
+    /// What is applied now, after snapping: the matrix, and the value shown next to the gizmo.
+    current: Mat4,
+    readout: String,
 }
 
 /// The gizmo as seen this frame.
@@ -195,13 +209,19 @@ impl ViewerApp {
 
     // --- Gizmo ---------------------------------------------------------------------------------
 
+    /// Where the gizmo sits: on the targets' bounds, or during a drag on the frozen pivot (moved
+    /// along with a move, so the arrows follow the part).
     fn gizmo_geometry(&self, viewport: Rect) -> Option<Geometry> {
-        let targets = self.transform_targets();
-        let bounds = self.targets_bounds(&targets);
-        if !bounds.is_valid() {
-            return None;
-        }
-        let pivot = bounds.center();
+        let pivot = match &self.transform_drag {
+            Some(d) => d.current.transform_point3(d.pivot),
+            None => {
+                let bounds = self.targets_bounds(&self.transform_targets());
+                if !bounds.is_valid() {
+                    return None;
+                }
+                bounds.center()
+            }
+        };
         let aspect = viewport.width() / viewport.height().max(1.0);
         let view_proj = self.camera.projection(aspect) * self.camera.view_matrix();
         let project = |p: Vec3| {
@@ -222,9 +242,9 @@ impl ViewerApp {
         let arrows = axes.map(|a| project(pivot + a * ARROW_LEN * world_per_point));
         let rings = axes.map(|a| {
             let (u, v) = a.any_orthonormal_pair();
-            (0..=64)
+            (0..=72)
                 .filter_map(|k| {
-                    let t = k as f32 / 64.0 * TAU;
+                    let t = k as f32 / 72.0 * TAU;
                     project(pivot + (u * t.cos() + v * t.sin()) * RING_RADIUS * world_per_point)
                 })
                 .collect()
@@ -232,8 +252,8 @@ impl ViewerApp {
         Some(Geometry { pivot, center, world_per_point, arrows, rings })
     }
 
-    fn hovered_handle(geo: &Geometry, pointer: Pos2) -> Option<Handle> {
-        if pointer.distance(geo.center) <= CENTER_RADIUS + 2.0 {
+    fn hovered_handle(tool: Tool, geo: &Geometry, pointer: Pos2) -> Option<Handle> {
+        if tool != Tool::Rotate && pointer.distance(geo.center) <= CENTER_RADIUS + 2.0 {
             return Some(Handle::Center);
         }
         let mut best: Option<(f32, Handle)> = None;
@@ -243,14 +263,15 @@ impl ViewerApp {
             }
         };
         for k in 0..3 {
-            if let Some(tip) = geo.arrows[k] {
+            if tool == Tool::Rotate {
+                for w in geo.rings[k].windows(2) {
+                    consider(segment_distance(pointer, w[0], w[1]), Handle::Ring(k));
+                }
+            } else if let Some(tip) = geo.arrows[k] {
                 // Skip axes pointing at the viewer: they collapse onto the center.
                 if tip.distance(geo.center) > 12.0 {
                     consider(segment_distance(pointer, geo.center, tip), Handle::Axis(k));
                 }
-            }
-            for w in geo.rings[k].windows(2) {
-                consider(segment_distance(pointer, w[0], w[1]), Handle::Ring(k));
             }
         }
         best.map(|(_, h)| h)
@@ -259,7 +280,7 @@ impl ViewerApp {
     /// Gizmo input, before navigation. Returns true when the pointer belongs to the gizmo, so
     /// the click doesn't select.
     pub(super) fn transform_input(&mut self, ui: &Ui, response: &egui::Response, viewport: Rect) -> bool {
-        if self.tool != Tool::Move || self.lay_face_armed {
+        if !self.tool.transforms() || self.lay_face_armed {
             self.transform_drag = None;
             return false;
         }
@@ -268,15 +289,27 @@ impl ViewerApp {
             return false;
         };
         let (pointer, mods) = ui.input(|i| (i.pointer.interact_pos().or(i.pointer.hover_pos()), i.modifiers));
-        if mods.alt {
+        if mods.alt && self.transform_drag.is_none() {
             return false;
         }
-        let hovered = pointer.and_then(|p| Self::hovered_handle(&geo, p));
+        let tool = self.tool;
+        let hovered = pointer.and_then(|p| Self::hovered_handle(tool, &geo, p));
         if response.drag_started_by(PointerButton::Primary) {
             let start_pointer = response.interact_pointer_pos().unwrap_or(geo.center);
-            if let Some(handle) = Self::hovered_handle(&geo, start_pointer) {
-                let a = (start_pointer - geo.center).angle();
-                self.transform_drag = Some(Drag { handle, pivot: geo.pivot, start: self.user_transforms.clone(), start_pointer, angle: 0.0, last_angle: a });
+            if let Some(handle) = Self::hovered_handle(tool, &geo, start_pointer) {
+                self.transform_drag = Some(Drag {
+                    handle,
+                    pivot: geo.pivot,
+                    center: geo.center,
+                    world_per_point: geo.world_per_point,
+                    arrows: geo.arrows,
+                    start: self.user_transforms.clone(),
+                    start_pointer,
+                    swept: 0.0,
+                    last_angle: (start_pointer - geo.center).angle(),
+                    current: Mat4::IDENTITY,
+                    readout: String::new(),
+                });
             }
         }
         let Some(mut drag) = self.transform_drag.take() else {
@@ -287,50 +320,79 @@ impl ViewerApp {
         };
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         let now = pointer.unwrap_or(drag.start_pointer);
-        let targets = self.transform_targets();
         let snap = mods.ctrl;
-        let m = match drag.handle {
-            Handle::Axis(k) => {
-                let Some(tip) = geo.arrows[k] else { return true };
-                let axis_screen = tip - geo.center;
-                let along = (now - drag.start_pointer).dot(axis_screen) / axis_screen.length_sq().max(1e-6);
-                let mut distance = along * ARROW_LEN * geo.world_per_point;
-                if snap {
-                    let cell = grid_params(&self.camera).0;
-                    distance = (distance / cell).round() * cell;
-                }
-                let mut d = Vec3::ZERO;
-                d[k] = distance;
-                Mat4::from_translation(d)
-            }
-            Handle::Center => {
-                let delta = (now - drag.start_pointer) * geo.world_per_point;
-                Mat4::from_translation(self.camera.right() * delta.x - self.camera.up() * delta.y)
-            }
-            Handle::Ring(k) => {
-                let a = (now - geo.center).angle();
+        let p = drag.pivot;
+        let about = |m: Mat4| Mat4::from_translation(p) * m * Mat4::from_translation(-p);
+        // How far the pointer went along axis `k` on screen, in gizmo lengths.
+        let along = |k: usize| {
+            drag.arrows[k].map(|tip| {
+                let axis = tip - drag.center;
+                (now - drag.start_pointer).dot(axis) / axis.length_sq().max(1e-6)
+            })
+        };
+        let up = self.settings.up_axis;
+        (drag.current, drag.readout) = match (tool, drag.handle) {
+            (Tool::Rotate, Handle::Ring(k)) => {
+                let a = (now - drag.center).angle();
                 let mut step = a - drag.last_angle;
                 if step > std::f32::consts::PI {
                     step -= TAU;
                 } else if step < -std::f32::consts::PI {
                     step += TAU;
                 }
-                drag.angle += step;
+                drag.swept += step;
                 drag.last_angle = a;
                 let mut axis = Vec3::ZERO;
                 axis[k] = 1.0;
                 // Screen angles grow clockwise (y down); seen from the axis tip that's negative.
                 let facing = axis.dot(self.camera.back()) >= 0.0;
-                let mut angle = if facing { -drag.angle } else { drag.angle };
+                let mut degrees = (if facing { -drag.swept } else { drag.swept }).to_degrees();
                 if snap {
-                    let step = 15f32.to_radians();
-                    angle = (angle / step).round() * step;
+                    degrees = (degrees / ANGLE_STEP).round() * ANGLE_STEP;
                 }
-                Mat4::from_translation(drag.pivot) * Mat4::from_axis_angle(axis, angle) * Mat4::from_translation(-drag.pivot)
+                let name = crate::axes::NAMES[up.display(k).0];
+                (about(Mat4::from_axis_angle(axis, degrees.to_radians())), format!("{name} {degrees:+.1}°"))
+            }
+            (Tool::Scale, Handle::Axis(k)) => {
+                let Some(t) = along(k) else { return true };
+                let mut f = (1.0 + t).max(0.01);
+                if snap {
+                    f = ((f / SCALE_STEP).round() * SCALE_STEP).max(SCALE_STEP);
+                }
+                let mut v = Vec3::ONE;
+                v[k] = f;
+                let name = crate::axes::NAMES[up.display(k).0];
+                (about(Mat4::from_scale(v)), format!("{name} ×{f:.2}"))
+            }
+            (Tool::Scale, _) => {
+                let r0 = drag.start_pointer.distance(drag.center).max(4.0);
+                let mut f = (now.distance(drag.center) / r0).max(0.01);
+                if snap {
+                    f = ((f / SCALE_STEP).round() * SCALE_STEP).max(SCALE_STEP);
+                }
+                (about(Mat4::from_scale(Vec3::splat(f))), format!("×{f:.2}"))
+            }
+            (_, Handle::Axis(k)) => {
+                let Some(t) = along(k) else { return true };
+                let mut distance = t * ARROW_LEN * drag.world_per_point;
+                if snap {
+                    let cell = grid_params(&self.camera).0;
+                    distance = (distance / cell).round() * cell;
+                }
+                let mut d = Vec3::ZERO;
+                d[k] = distance;
+                let name = crate::axes::NAMES[up.display(k).0];
+                (Mat4::from_translation(d), format!("{name} {}", self.fmt_model_len(distance)))
+            }
+            _ => {
+                let delta = (now - drag.start_pointer) * drag.world_per_point;
+                let d = self.camera.right() * delta.x - self.camera.up() * delta.y;
+                let shown = up.to_display(d);
+                (Mat4::from_translation(d), format!("X {}  Y {}  Z {}", self.fmt_model_len(shown.x), self.fmt_model_len(shown.y), self.fmt_model_len(shown.z)))
             }
         };
-        for &i in &targets {
-            self.user_transforms[i] = m * drag.start[i];
+        for &i in &self.transform_targets() {
+            self.user_transforms[i] = drag.current * drag.start[i];
         }
         let released = !response.dragged_by(PointerButton::Primary);
         if released {
@@ -402,7 +464,7 @@ impl ViewerApp {
 
     pub(super) fn draw_transform_gizmo(&self, ui: &Ui, viewport: Rect) {
         // The overlays switch hides the grid and markers, not the tool being used.
-        if self.tool != Tool::Move {
+        if !self.tool.transforms() {
             return;
         }
         if self.lay_face_armed {
@@ -413,56 +475,66 @@ impl ViewerApp {
         let painter = ui.painter().with_clip_rect(viewport);
         let pointer = ui.input(|i| i.pointer.hover_pos());
         let active = self.transform_drag.as_ref().map(|d| d.handle);
-        let hot = active.or_else(|| pointer.and_then(|p| Self::hovered_handle(&geo, p)));
+        let hot = active.or_else(|| pointer.and_then(|p| Self::hovered_handle(self.tool, &geo, p)));
         let shadow = Color32::from_black_alpha(150);
         let up = self.settings.up_axis;
         let color = |k: usize, h: Handle| {
             let c = crate::axes::color(up.display(k).0);
             if hot == Some(h) { Color32::WHITE } else { c }
         };
-        for k in 0..3 {
-            let c = color(k, Handle::Ring(k));
-            painter.add(egui::Shape::line(geo.rings[k].clone(), Stroke::new(4.0, shadow)));
-            painter.add(egui::Shape::line(geo.rings[k].clone(), Stroke::new(if hot == Some(Handle::Ring(k)) { 3.0 } else { 2.0 }, c)));
-        }
-        for k in 0..3 {
-            let Some(tip) = geo.arrows[k] else { continue };
-            if tip.distance(geo.center) <= 12.0 {
-                continue;
-            }
-            let c = color(k, Handle::Axis(k));
-            painter.line_segment([geo.center, tip], Stroke::new(4.5, shadow));
-            painter.line_segment([geo.center, tip], Stroke::new(if hot == Some(Handle::Axis(k)) { 3.0 } else { 2.2 }, c));
-            let dir = (tip - geo.center).normalized();
-            let side = vec2(-dir.y, dir.x);
-            let head = vec![tip + dir * 9.0, tip - side * 5.5, tip + side * 5.5];
-            painter.add(egui::Shape::convex_polygon(head, c, Stroke::new(1.0, shadow)));
-        }
-        let fill = if hot == Some(Handle::Center) { Color32::WHITE } else { Color32::from_white_alpha(200) };
-        painter.circle(geo.center, CENTER_RADIUS * 0.55, fill, Stroke::new(1.5, shadow));
-        painter.circle_stroke(geo.center, CENTER_RADIUS, Stroke::new(1.2, Color32::from_white_alpha(170)));
-
-        // Live readout while dragging: what changed, in the units the file uses.
-        if let Some(drag) = &self.transform_drag {
-            let text = match drag.handle {
-                Handle::Ring(_) => format!("{:.1}°", drag.angle.to_degrees().abs()),
-                _ => {
-                    let first = self.transform_targets().first().copied();
-                    let moved = first.map_or(Vec3::ZERO, |i| (self.user_transforms[i] * drag.start[i].inverse()).w_axis.truncate());
-                    let d = up.to_display(moved);
-                    format!("X {}  Y {}  Z {}", self.fmt_model_len(d.x), self.fmt_model_len(d.y), self.fmt_model_len(d.z))
+        let width = |h: Handle| if hot == Some(h) { 3.0 } else { 2.2 };
+        match self.tool {
+            Tool::Rotate => {
+                for k in 0..3 {
+                    let h = Handle::Ring(k);
+                    painter.add(egui::Shape::line(geo.rings[k].clone(), Stroke::new(4.0, shadow)));
+                    painter.add(egui::Shape::line(geo.rings[k].clone(), Stroke::new(width(h), color(k, h))));
                 }
-            };
-            let galley = painter.layout_no_wrap(text, theme::mono(11.5), theme::TEXT);
-            let chip = Rect::from_min_size(geo.center + vec2(16.0, 16.0), galley.size() + vec2(16.0, 10.0));
+                // While turning: a line from the center to where the angle is measured.
+                if let (Some(d), Some(p)) = (&self.transform_drag, pointer) {
+                    painter.add(egui::Shape::dashed_line(&[d.center, p], Stroke::new(1.2, Color32::from_white_alpha(170)), 5.0, 4.0));
+                }
+                painter.circle_filled(geo.center, 3.0, Color32::from_white_alpha(200));
+            }
+            tool => {
+                for k in 0..3 {
+                    let Some(tip) = geo.arrows[k] else { continue };
+                    if tip.distance(geo.center) <= 12.0 {
+                        continue;
+                    }
+                    let h = Handle::Axis(k);
+                    let c = color(k, h);
+                    let dir = (tip - geo.center).normalized();
+                    let side = vec2(-dir.y, dir.x);
+                    painter.line_segment([geo.center, tip], Stroke::new(4.5, shadow));
+                    painter.line_segment([geo.center, tip], Stroke::new(width(h), c));
+                    if tool == Tool::Scale {
+                        let square = Rect::from_center_size(tip, vec2(10.0, 10.0));
+                        painter.rect(square, CornerRadius::ZERO, c, Stroke::new(1.0, shadow), egui::StrokeKind::Middle);
+                    } else {
+                        let head = vec![tip + dir * 9.0, tip - side * 5.5, tip + side * 5.5];
+                        painter.add(egui::Shape::convex_polygon(head, c, Stroke::new(1.0, shadow)));
+                    }
+                }
+                let fill = if hot == Some(Handle::Center) { Color32::WHITE } else { Color32::from_white_alpha(200) };
+                painter.circle(geo.center, CENTER_RADIUS * 0.55, fill, Stroke::new(1.5, shadow));
+                painter.circle_stroke(geo.center, CENTER_RADIUS, Stroke::new(1.2, Color32::from_white_alpha(170)));
+            }
+        }
+
+        // Live readout while dragging: the snapped value actually applied.
+        if let Some(drag) = &self.transform_drag {
+            let galley = painter.layout_no_wrap(drag.readout.clone(), theme::mono(11.5), theme::TEXT);
+            let at = pointer.unwrap_or(geo.center) + vec2(18.0, 18.0);
+            let chip = Rect::from_min_size(at, galley.size() + vec2(16.0, 10.0));
             painter.rect_filled(chip, CornerRadius::same(theme::RADIUS), Color32::from_black_alpha(215));
             painter.galley(chip.min + vec2(8.0, 5.0), galley, theme::TEXT);
         }
     }
 
-    /// Shortcuts that only apply with the Move tool.
+    /// Shortcuts of the Move, Rotate and Scale tools.
     pub(super) fn transform_shortcuts(&mut self, ctx: &egui::Context) {
-        if self.tool != Tool::Move || self.info.is_none() || !self.manufacturing() {
+        if !self.tool.transforms() || self.info.is_none() || !self.manufacturing() {
             return;
         }
         let pressed = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
@@ -488,9 +560,9 @@ impl ViewerApp {
         }
     }
 
-    /// Move tool options, docked at the bottom of the viewport.
+    /// Move, Rotate and Scale options, docked at the bottom of the viewport.
     pub(super) fn transform_bar(&mut self, ctx: &egui::Context, viewport: Rect) {
-        if self.tool != Tool::Move || self.info.is_none() || !self.manufacturing() {
+        if !self.tool.transforms() || self.info.is_none() || !self.manufacturing() {
             return;
         }
         let targets = self.transform_targets();
@@ -504,7 +576,12 @@ impl ViewerApp {
                 toolbar(ui, |ui| {
                     ui.add_space(6.0);
                     let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
-                    icons::transform(ui.painter(), r, theme::TEXT_DIM);
+                    let icon: icons::IconFn = match self.tool {
+                        Tool::Rotate => icons::rotate,
+                        Tool::Scale => icons::scale,
+                        _ => icons::move_arrows,
+                    };
+                    icon(ui.painter(), r, theme::TEXT_DIM);
                     // Size of what the gizmo moves, so a part can be checked against the bed.
                     let size = if bounds.is_valid() {
                         let s = self.settings.up_axis.to_display(bounds.max - bounds.min).abs();
