@@ -13,7 +13,8 @@ use super::{theme, widgets};
 use crate::loader::{self, EnvImage};
 use crate::render::{environment, matcap};
 use crate::settings::{
-    ColorMode, Environment, Finish, Lighting, Settings, ShadingMode, TexturePass, ViewTransform,
+    ColorMode, Environment, Lighting, MaterialGroup, MetalFinish, PartMaterial, Settings, ShadingMode, TexturePass,
+    ViewTransform,
 };
 
 const ENV_THUMB: [u32; 2] = [128, 64];
@@ -130,11 +131,6 @@ pub fn overlays(ui: &mut Ui, s: &mut Settings) {
 pub fn shading(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails, manufacturing: bool) -> Option<PopoverAction> {
     ui.set_min_width(270.0);
     let mut action = None;
-    if manufacturing && s.shading == ShadingMode::Rendered {
-        print_finish(ui, s);
-        ui.add_space(4.0);
-        ui.separator();
-    }
     match s.shading {
         ShadingMode::Solid => solid(ui, s, thumbs, manufacturing),
         ShadingMode::Wireframe => {
@@ -164,47 +160,94 @@ pub fn shading(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails, manufactu
     action
 }
 
-/// What a part is made of on screen (Manufacturing): plain plastic of one color, or the
-/// materials the file carries. The choice applies to Solid and Rendered.
+/// What a part is made of on screen (Manufacturing): one color and a material, or the file's own
+/// materials; then wear (grain, scratches) over either.
 pub fn part_material(ui: &mut Ui, s: &mut Settings) {
     widgets::section(ui, "Part Material");
     ui.horizontal(|ui| {
-        widgets::segmented(ui, &mut s.file_materials, &[(false, "Plastic"), (true, "File materials")]);
+        widgets::segmented(ui, &mut s.file_materials, &[(false, "One color"), (true, "File materials")]);
     });
     if s.file_materials {
         ui.label(RichText::new(tr("The colors and materials stored in the file")).size(11.0).color(theme::TEXT_DIM));
     } else {
         ui.horizontal(|ui| {
             ui.color_edit_button_srgb(&mut s.plastic_color);
-            ui.label(RichText::new(tr("Satin plastic, the file's materials are ignored")).size(11.0).color(theme::TEXT_DIM));
+            hex_field(ui, &mut s.plastic_color);
         });
-    }
-    if !s.file_materials && s.shading != ShadingMode::Wireframe {
-        ui.add(egui::Slider::new(&mut s.surface_imperfection, 0.0..=1.0)
-            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
-            .custom_parser(|t| t.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0))
-            .text(tr("Surface imperfection")))
-            .on_hover_text(tr("Fine relief and uneven gloss over the whole model, for a more realistic preview. 0 = perfectly smooth"));
-    }
-}
-
-/// Print finish for quick renders of a part: material, layer height, filament color.
-fn print_finish(ui: &mut Ui, s: &mut Settings) {
-    widgets::section(ui, "Print Finish");
-    for row in Finish::ALL.chunks(4) {
+        ui.add_space(4.0);
+        let mut group = s.material.group();
         ui.horizontal(|ui| {
-            let options: Vec<(Finish, &str)> = row.iter().map(|f| (*f, f.label())).collect();
-            if widgets::segmented(ui, &mut s.finish, &options) {
-                s.layer_height = s.finish.layer_height();
+            let options: Vec<(MaterialGroup, &str)> = MaterialGroup::ALL.iter().map(|g| (*g, g.label())).collect();
+            if widgets::segmented(ui, &mut group, &options) {
+                s.material = group.first();
+                if s.material.layer_height() > 0.0 {
+                    s.layer_height = s.material.layer_height();
+                }
             }
         });
+        match group {
+            MaterialGroup::Fdm => {
+                ui.horizontal(|ui| {
+                    let options: Vec<(PartMaterial, &str)> = PartMaterial::FDM.iter().map(|m| (*m, m.label())).collect();
+                    widgets::segmented(ui, &mut s.material, &options);
+                });
+            }
+            MaterialGroup::Metal => {
+                ui.horizontal(|ui| {
+                    let options: Vec<(MetalFinish, &str)> = MetalFinish::ALL.iter().map(|f| (*f, f.label())).collect();
+                    widgets::segmented(ui, &mut s.metal_finish, &options);
+                });
+            }
+            _ => {}
+        }
+        ui.label(RichText::new(tr(s.material.description())).size(11.0).color(theme::TEXT_DIM));
+        if s.material.layer_height() > 0.0 {
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut s.layer_lines, tr("Layer lines"));
+                ui.add_enabled(s.layer_lines, egui::Slider::new(&mut s.layer_height, 0.02..=0.6).step_by(0.01).suffix(" mm"))
+                    .on_hover_text(tr("Layer lines run along Z: lay the part on a face to change the print direction"));
+            });
+        }
+        if s.shading != ShadingMode::Rendered {
+            ui.label(RichText::new(tr("Rendered mode shows the material; Solid only its color and relief.")).size(11.0).color(theme::TEXT_FAINT));
+        }
     }
-    ui.label(RichText::new(tr(s.finish.description())).size(11.0).color(theme::TEXT_DIM));
-    if s.finish == Finish::Off {
-        return;
+    ui.add_space(8.0);
+    widgets::section(ui, "Surface Wear");
+    let percent = |v: &mut f32, label: &str, tip: &str, ui: &mut Ui| {
+        ui.add(egui::Slider::new(v, 0.0..=1.0)
+            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+            .custom_parser(|t| t.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0))
+            .text(tr(label)))
+            .on_hover_text(tr(tip));
+    };
+    percent(&mut s.grain, "Grain", "Fine relief, uneven gloss and dust, so the part looks less like a perfect CG surface", ui);
+    percent(&mut s.scratches, "Scratches", "Handling marks: on metal they catch the light, on plastic they whiten", ui);
+    ui.add(egui::Slider::new(&mut s.grain_size, 0.2..=5.0).logarithmic(true).custom_formatter(|v, _| format!("×{v:.1}")).text(tr("Pattern size")))
+        .on_hover_text(tr("Scale of the grain and scratch patterns"));
+}
+
+/// The color as #RRGGBB, editable.
+fn hex_field(ui: &mut Ui, rgb: &mut [u8; 3]) {
+    let id = ui.id().with("hex");
+    let current = format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]);
+    let mut text = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| current.clone());
+    let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(78.0).font(theme::mono(12.0)));
+    if r.changed() {
+        let hex = text.trim().trim_start_matches('#');
+        if hex.len() == 6 {
+            if let Ok(v) = u32::from_str_radix(hex, 16) {
+                *rgb = [(v >> 16) as u8, (v >> 8) as u8, v as u8];
+            }
+        }
     }
-    ui.add(egui::Slider::new(&mut s.layer_height, 0.02..=0.6).step_by(0.01).suffix(" mm").text(tr("Layer height")))
-        .on_hover_text(tr("Layer lines run along Z: lay the part on a face to change the print direction"));
+    // While typing, keep what was typed; otherwise follow the color picker.
+    if r.has_focus() {
+        ui.data_mut(|d| d.insert_temp(id, text));
+    } else {
+        ui.data_mut(|d| d.remove::<String>(id));
+    }
+    r.on_hover_text(tr("Hex color, like #D9D9D6"));
 }
 
 /// Checkbox with the marker color as a swatch after the label.

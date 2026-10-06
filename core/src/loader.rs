@@ -199,7 +199,7 @@ fn missing_image(name: &str) -> Image {
 }
 
 /// Box-filtered mip chain down to 1x1.
-fn build_mips(width: u32, height: u32, level0: Vec<u8>) -> Vec<Vec<u8>> {
+pub fn build_mips(width: u32, height: u32, level0: Vec<u8>) -> Vec<Vec<u8>> {
     let mut mips = vec![level0];
     let (mut w, mut h) = (width as usize, height as usize);
     while w > 1 || h > 1 {

@@ -92,7 +92,20 @@ impl CaptureOptions {
                     s.workspace = if v.starts_with('m') { Workspace::Manufacturing } else { Workspace::Art };
                 }
                 "--file-materials" => s.file_materials = true,
-                "--imperfection" => s.surface_imperfection = v.parse().unwrap_or(0.25),
+                "--grain" => s.grain = v.parse().unwrap_or(0.3),
+                "--scratches" => s.scratches = v.parse().unwrap_or(0.5),
+                "--material" => {
+                    use crate::settings::{MetalFinish, PartMaterial};
+                    let all = [PartMaterial::Pla, PartMaterial::PlaSilk, PartMaterial::Petg, PartMaterial::Abs, PartMaterial::Resin, PartMaterial::Nylon, PartMaterial::Metal];
+                    if let Some(m) = all.into_iter().find(|m| m.label().replace(' ', "").eq_ignore_ascii_case(&v.replace(['-', '_'], ""))) {
+                        s.material = m;
+                        s.layer_height = m.layer_height().max(0.05);
+                    }
+                    if let Some(f) = MetalFinish::ALL.into_iter().find(|f| f.label().eq_ignore_ascii_case(v)) {
+                        s.material = PartMaterial::Metal;
+                        s.metal_finish = f;
+                    }
+                }
                 "--matcap" => s.matcap = v.parse().unwrap_or(0),
                 "--pass" => {
                     s.color = ColorMode::Texture;
@@ -245,7 +258,7 @@ pub fn parse() -> Result<LaunchOptions, String> {
                 let (x, y) = v.split_once(',').ok_or("--click expects X,Y")?;
                 capture.click = Some([x.parse().map_err(|_| "bad --click x")?, y.parse().map_err(|_| "bad --click y")?]);
             }
-            "--shading" | "--lighting" | "--color" | "--matcap" | "--pass" | "--env" | "--workspace" | "--imperfection" => {
+            "--shading" | "--lighting" | "--color" | "--matcap" | "--pass" | "--env" | "--workspace" | "--grain" | "--scratches" | "--material" => {
                 let v = value(&arg)?;
                 capture.settings.push((arg, Some(v)));
             }

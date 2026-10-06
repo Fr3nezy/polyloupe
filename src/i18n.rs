@@ -252,6 +252,35 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Move down until it touches the bed (B)" => "Abbassa finché tocca il piano (B)",
         "Back to the position in the file (Alt G)" => "Torna alla posizione del file (Alt G)",
         "Tools" => "Strumenti",
+        "One color" => "Colore unico",
+        "FDM plastic" => "Plastica FDM",
+        "Metal" => "Metallo",
+        "PLA Silk" => "PLA Silk",
+        "Matte, visible layer lines" => "Opaco, layer visibili",
+        "Satin metallic sheen, layer lines" => "Riflesso metallico satinato, layer visibili",
+        "Glossy, visible layer lines" => "Lucido, layer visibili",
+        "Satin, visible layer lines" => "Satinato, layer visibili",
+        "Machined or sintered metal" => "Metallo lavorato o sinterizzato",
+        "Polished" => "Lucidato",
+        "Satin" => "Satinato",
+        "Brushed" => "Spazzolato",
+        "Blasted" => "Sabbiato",
+        "Layer lines" => "Linee dei layer",
+        "Rendered mode shows the material; Solid only its color and relief." => {
+            "Il materiale si vede in Renderizzato; in Solido solo colore e rilievo."
+        }
+        "Surface Wear" => "Usura superficie",
+        "Grain" => "Grana",
+        "Scratches" => "Graffi",
+        "Pattern size" => "Scala motivo",
+        "Fine relief, uneven gloss and dust, so the part looks less like a perfect CG surface" => {
+            "Rilievo fine, lucentezza irregolare e polvere, perché il pezzo non sembri una superficie CG perfetta"
+        }
+        "Handling marks: on metal they catch the light, on plastic they whiten" => {
+            "Segni d'uso: sul metallo catturano la luce, sulla plastica sbiancano"
+        }
+        "Scale of the grain and scratch patterns" => "Scala dei motivi di grana e graffi",
+        "Hex color, like #D9D9D6" => "Colore esadecimale, per esempio #D9D9D6",
         "Move (W)" => "Sposta (W)",
         "Rotate (E)" => "Ruota (E)",
         "Scale (R)" => "Scala (R)",

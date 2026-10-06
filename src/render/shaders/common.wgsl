@@ -31,14 +31,16 @@ struct Globals {
     // x: normal line length (world units, 0 = off), y: 1 for the face orientation overlay.
     normals: vec4<f32>,
     // x: 1 when the interface calls Y up: world Y lines are drawn blue (Z) and world Z green (Y).
-    // y: 1 for the neutral plastic material (Manufacturing): the file's materials are ignored.
-    // z: strength of the surface imperfection on the neutral plastic (0 = none).
+    // y: 1 for the part color (Manufacturing): the file's materials are ignored.
     display: vec4<f32>,
-    // Print finish (Rendered mode): x finish id (0 off), y layer height in world units,
-    // w world units per millimeter.
+    // Part material (Manufacturing): x material id (0 = none; Rendered only), y layer height in
+    // world units (0 = no layer lines), z metal finish, w world units per millimeter.
     finish: vec4<f32>,
-    // Neutral plastic color, linear RGB.
+    // Part color, linear RGB.
     finish_color: vec4<f32>,
+    // Surface wear (Manufacturing): x grain and y scratch strength (0..1), z grain and w scratch
+    // map tile size in world units.
+    surface: vec4<f32>,
 };
 
 fn section_cuts(world_pos: vec3<f32>) -> bool {

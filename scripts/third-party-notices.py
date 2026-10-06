@@ -17,6 +17,7 @@ LICENSE_PREFIXES = ("license", "licence", "copying", "notice", "unlicense")
 ASSETS = [
     ("Space Grotesk font (assets/fonts)", "assets/fonts/OFL.txt"),
     ("Blender HDRIs: Forest, Studio, Sunset (assets/hdri)", "assets/hdri/LICENSE.txt"),
+    ("ambientCG surface wear maps (assets/surface)", "assets/surface/LICENSE.txt"),
     # Built from source by the cadrum crate into target/occt (see .cargo/config.toml).
     ("Open CASCADE Technology 8.0.1 (polyloupe_step.dll): LGPL 2.1", "target/occt/LICENSE_LGPL_21.txt"),
     ("Open CASCADE Technology: LGPL exception", "target/occt/OCCT_LGPL_EXCEPTION.txt"),

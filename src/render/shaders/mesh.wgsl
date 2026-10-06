@@ -30,6 +30,9 @@ struct MaterialU {
 @group(0) @binding(5) var env_irr: texture_2d<f32>;
 @group(0) @binding(6) var brdf_lut: texture_2d<f32>;
 @group(0) @binding(7) var env_samp: sampler;
+// Surface wear maps (layer 0 grain, 1 scratches), see `SURFACE_MAPS`.
+@group(0) @binding(8) var surface_tex: texture_2d_array<f32>;
+@group(0) @binding(9) var surface_samp: sampler;
 
 @group(1) @binding(0) var<uniform> obj: Object;
 @group(1) @binding(1) var<storage, read> joint_mats: array<mat4x4<f32>>;
@@ -208,50 +211,110 @@ fn noise3(p: vec3<f32>) -> f32 {
     return mix(mix(a, b, u.y), mix(c, d, u.y), u.z);
 }
 
-// `pos_fw`: fwidth of the world position, taken where control flow is still uniform.
-fn print_finish(p: vec3<f32>, pos_fw: vec3<f32>, n_in: vec3<f32>, model: vec3<f32>) -> Finish {
+// A surface map layer projected on the three world planes and blended by the surface's
+// orientation (triplanar, so no UVs): the map's normal as a world-space offset, and its B and A
+// channels. Gradients come from the caller, where control flow is still uniform; mipmaps keep
+// the pattern from turning to noise in the distance.
+struct Tri {
+    offset: vec3<f32>,
+    data: vec2<f32>,
+};
+
+fn triplanar(p: vec3<f32>, dpx: vec3<f32>, dpy: vec3<f32>, n: vec3<f32>, tile: f32, layer: i32) -> Tri {
+    var w = pow(abs(n), vec3<f32>(4.0));
+    w /= w.x + w.y + w.z;
+    let k = 1.0 / tile;
+    let sx = textureSampleGrad(surface_tex, surface_samp, p.zy * k, layer, dpx.zy * k, dpy.zy * k);
+    let sy = textureSampleGrad(surface_tex, surface_samp, p.xz * k, layer, dpx.xz * k, dpy.xz * k);
+    let sz = textureSampleGrad(surface_tex, surface_samp, p.xy * k, layer, dpx.xy * k, dpy.xy * k);
+    let tx = sx.xy * 2.0 - 1.0;
+    let ty = sy.xy * 2.0 - 1.0;
+    let tz = sz.xy * 2.0 - 1.0;
+    var out: Tri;
+    out.offset = vec3<f32>(0.0, tx.y, tx.x) * w.x + vec3<f32>(ty.x, 0.0, ty.y) * w.y + vec3<f32>(tz.x, tz.y, 0.0) * w.z;
+    out.data = sx.zw * w.x + sy.zw * w.y + sz.zw * w.z;
+    return out;
+}
+
+// Tilts `n` by a world-space offset, keeping only the part along the surface.
+fn bump(n: vec3<f32>, offset: vec3<f32>, k: f32) -> vec3<f32> {
+    return normalize(n + (offset - n * dot(offset, n)) * k);
+}
+
+// The part material (Manufacturing): its sheen, FDM/resin layer lines, then surface wear.
+// `rendered` is false in Solid, where only the relief counts. `pos_fw`, `dpx`, `dpy`: screen
+// derivatives of the world position, taken where control flow is still uniform.
+fn part_surface(p: vec3<f32>, pos_fw: vec3<f32>, dpx: vec3<f32>, dpy: vec3<f32>, n_in: vec3<f32>, base: vec3<f32>, metallic_in: f32, rough_in: f32) -> Finish {
     var out: Finish;
-    out.albedo = model;
-    out.metallic = 0.0;
-    out.rough = 0.5;
+    out.albedo = base;
+    out.metallic = metallic_in;
+    out.rough = rough_in;
     out.ao = 1.0;
-    // Strength of the layer lines and of the powder grain, grain size in millimeters.
+    var n = n_in;
+    let id = u32(g.finish.x + 0.5);
+    let metal = id == 7u;
     var lines = 0.0;
-    var grain = 0.0;
-    var grain_mm = 0.05;
-    switch u32(g.finish.x + 0.5) {
-        case 1u: { out.rough = 0.62; lines = 0.55; }
-        case 2u: { out.rough = 0.18; lines = 0.5; }
-        case 3u: { out.rough = 0.3; out.metallic = 0.55; lines = 0.35; }
-        case 4u: { out.rough = 0.32; lines = 0.12; }
-        case 5u: { out.rough = 0.92; lines = 0.05; grain = 0.4; grain_mm = 0.06; }
-        case 6u: { out.rough = 0.45; out.metallic = 1.0; lines = 0.08; grain = 0.28; grain_mm = 0.04; }
+    var grain_k = 1.0;
+    switch id {
+        case 1u: { out.rough = 0.55; out.metallic = 0.0; lines = 0.55; }
+        case 2u: { out.rough = 0.26; out.metallic = 0.55; lines = 0.35; }
+        case 3u: { out.rough = 0.16; out.metallic = 0.0; lines = 0.5; }
+        case 4u: { out.rough = 0.42; out.metallic = 0.0; lines = 0.5; }
+        case 5u: { out.rough = 0.3; out.metallic = 0.0; lines = 0.12; }
+        case 6u: { out.rough = 0.88; out.metallic = 0.0; grain_k = 2.2; }
+        case 7u: {
+            out.metallic = 1.0;
+            switch u32(g.finish.z + 0.5) {
+                case 0u: { out.rough = 0.07; }
+                case 1u: { out.rough = 0.28; }
+                case 2u: { out.rough = 0.3; }
+                default: { out.rough = 0.55; grain_k = 1.8; }
+            }
+        }
         default: {}
     }
-    var n = n_in;
-    // Walls show the layers; flat tops and bottoms don't.
+    // Layer lines along world Z (the bed's normal), on the walls only.
     let side = sqrt(max(1.0 - n_in.z * n_in.z, 0.0));
-    let t = p.z / g.finish.y;
-    // Layers thinner than a pixel fade out instead of shimmering.
-    let fade = 1.0 - smoothstep(0.3, 0.8, pos_fw.z / g.finish.y);
-    if lines > 0.0 && fade > 0.0 && side > 0.0 {
-        // Each layer is a rounded bead: its normal tilts up above the bead's middle and down
-        // below it, with a crease where two layers meet.
-        let f = fract(t) - 0.5;
-        let up = normalize(vec3<f32>(0.0, 0.0, 1.0) - n_in * n_in.z);
-        n = normalize(n + up * (2.0 * f * lines * fade * side));
-        out.ao *= 1.0 - 0.35 * pow(abs(f) * 2.0, 6.0) * side * fade * lines;
-        // Extrusion varies a little from layer to layer.
-        out.albedo *= 1.0 + (hash13(vec3<f32>(floor(t), 7.0, 3.0)) - 0.5) * 0.06 * fade * min(lines * 2.0, 1.0);
+    if lines > 0.0 && g.finish.y > 0.0 && side > 0.0 {
+        let t = p.z / g.finish.y;
+        // Layers thinner than a pixel fade out instead of shimmering.
+        let fade = 1.0 - smoothstep(0.3, 0.8, pos_fw.z / g.finish.y);
+        if fade > 0.0 {
+            // Each layer is a rounded bead: its normal tilts up above the bead's middle and down
+            // below it, with a crease where two layers meet.
+            let f = fract(t) - 0.5;
+            let up = normalize(vec3<f32>(0.0, 0.0, 1.0) - n_in * n_in.z);
+            n = normalize(n + up * (2.0 * f * lines * fade * side));
+            out.ao *= 1.0 - 0.35 * pow(abs(f) * 2.0, 6.0) * side * fade * lines;
+            out.albedo *= 1.0 + (hash13(vec3<f32>(floor(t), 7.0, 3.0)) - 0.5) * 0.06 * fade * min(lines * 2.0, 1.0);
+        }
     }
-    if grain > 0.0 {
-        let scale = 1.0 / (grain_mm * g.finish.w);
-        let q = p * scale;
-        let gfade = 1.0 - smoothstep(0.5, 1.5, length(pos_fw) * scale);
-        if gfade > 0.0 {
-            let gn = vec3<f32>(noise3(q), noise3(q + vec3<f32>(17.3)), noise3(q + vec3<f32>(41.7))) - vec3<f32>(0.5);
-            n = normalize(n + gn * grain * gfade);
-            out.albedo *= 1.0 + (noise3(q * 0.5 + vec3<f32>(3.1)) - 0.5) * 0.12 * gfade;
+    // Brushed metal: fine lines in the scratch map's A channel, stretched along one axis.
+    if metal && u32(g.finish.z + 0.5) == 2u && g.surface.w > 0.0 {
+        let b = triplanar(p, dpx, dpy, n_in, g.surface.w * 0.25, 1);
+        out.rough = clamp(out.rough + (b.data.y - 0.25) * 0.35, 0.05, 1.0);
+        out.albedo *= 1.0 + (b.data.y - 0.25) * 0.15;
+    }
+    // Grain and dust: relief, uneven gloss, faint specks.
+    if g.surface.x > 0.0 {
+        let k = g.surface.x * grain_k;
+        let s = triplanar(p, dpx, dpy, n_in, g.surface.z, 0);
+        n = bump(n, s.offset, 0.35 * k);
+        out.rough = clamp(out.rough + (s.data.x - 0.5) * 0.45 * k + s.data.y * 0.25 * k, 0.03, 1.0);
+        out.albedo *= 1.0 - s.data.y * 0.12 * k;
+    }
+    // Scratches: dents in the normal; they catch the light differently from the surface.
+    if g.surface.y > 0.0 {
+        let k = g.surface.y;
+        let s = triplanar(p, dpx, dpy, n_in, g.surface.w, 1);
+        let m = clamp(s.data.x * k * 1.5, 0.0, 1.0);
+        n = bump(n, s.offset, 0.3 * k);
+        if metal || out.metallic > 0.5 {
+            out.rough = mix(out.rough, max(out.rough, 0.4), m);
+        } else {
+            // Plastic whitens where it's scratched.
+            out.rough = mix(out.rough, 0.65, m);
+            out.albedo = mix(out.albedo, out.albedo * 1.2 + vec3<f32>(0.04), m * 0.6);
         }
     }
     out.n = n;
@@ -264,6 +327,8 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     let dx = dpdx(in.uv);
     let dy = dpdy(in.uv);
     let pos_fw = fwidth(in.world_pos);
+    let dpx = dpdx(in.world_pos);
+    let dpy = dpdy(in.world_pos);
 
     if section_cuts(in.world_pos) {
         discard;
@@ -363,26 +428,14 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     } else if mode == 2u {
         let v = view_dir(in.world_pos);
         var albedo = base.rgb;
-        if g.finish.x > 0.5 {
-            let f = print_finish(in.world_pos, pos_fw, n, base.rgb);
+        // Manufacturing: the part material and its wear.
+        if g.finish.w > 0.0 {
+            let f = part_surface(in.world_pos, pos_fw, dpx, dpy, n, base.rgb, metallic, rough);
             n = f.n;
             albedo = f.albedo;
             metallic = f.metallic;
             rough = f.rough;
             ao *= f.ao;
-        }
-        // Global surface imperfection: fine relief, uneven gloss and faint blotches, in world
-        // space (millimeters), so it needs no UVs and follows the part when it is moved.
-        if g.display.z > 0.0 {
-            let k = g.display.z;
-            let scale = 1.0 / (0.4 * g.finish.w);
-            let q = in.world_pos * scale;
-            let fine = 1.0 - smoothstep(0.5, 1.5, length(pos_fw) * scale);
-            let gn = vec3<f32>(noise3(q), noise3(q + vec3<f32>(17.3)), noise3(q + vec3<f32>(41.7))) - vec3<f32>(0.5);
-            let broad = noise3(q * 0.06 + vec3<f32>(5.0)) - 0.5;
-            n = normalize(n + gn * 0.35 * k * fine);
-            rough = clamp(rough + ((noise3(q * 0.3 + vec3<f32>(3.1)) - 0.5) * fine + broad) * 0.5 * k, 0.03, 1.0);
-            albedo *= 1.0 + broad * 0.1 * k;
         }
         color = ibl(n, v, albedo, clamp(metallic, 0.0, 1.0), clamp(rough, 0.03, 1.0)) * ao + emissive;
         color = view_transform(color * g.params.y, g.extra.y);
@@ -390,13 +443,14 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         let c = select(vec3<f32>(0.8), in.color.rgb, has(HAS_COLOR));
         color = lit(n, c);
     } else {
-        // Solid: only a light touch of relief in the shading, no gloss to vary.
-        if g.display.z > 0.0 {
-            let scale = 1.0 / (0.4 * g.finish.w);
-            let q = in.world_pos * scale;
-            let fine = 1.0 - smoothstep(0.5, 1.5, length(pos_fw) * scale);
-            let gn = vec3<f32>(noise3(q), noise3(q + vec3<f32>(17.3)), noise3(q + vec3<f32>(41.7))) - vec3<f32>(0.5);
-            n = normalize(n + gn * 0.12 * g.display.z * fine);
+        // Solid: the wear's relief only, at half strength (no gloss to vary).
+        if g.finish.w > 0.0 && (g.surface.x > 0.0 || g.surface.y > 0.0) {
+            if g.surface.x > 0.0 {
+                n = bump(n, triplanar(in.world_pos, dpx, dpy, n, g.surface.z, 0).offset, 0.17 * g.surface.x);
+            }
+            if g.surface.y > 0.0 {
+                n = bump(n, triplanar(in.world_pos, dpx, dpy, n, g.surface.w, 1).offset, 0.15 * g.surface.y);
+            }
         }
         color = lit(n, obj.color.rgb);
         alpha = obj.color.a;

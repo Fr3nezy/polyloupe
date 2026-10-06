@@ -15,7 +15,7 @@ use wgpu::util::DeviceExt;
 
 use crate::loader::EnvImage;
 use crate::scene::{AlphaMode, Scene};
-use crate::settings::{ColorMode, Lighting, Settings, ShadingMode, TexturePass, ViewTransform};
+use crate::settings::{ColorMode, Lighting, MetalFinish, PartMaterial, Settings, ShadingMode, TexturePass, ViewTransform};
 
 const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// egui expects gamma-encoded texels, so it samples the same memory through a non-sRGB view.
@@ -61,6 +61,20 @@ struct GlobalsUniform {
     display: [f32; 4],
     finish: [f32; 4],
     finish_color: [f32; 4],
+    surface: [f32; 4],
+}
+
+/// Surface wear maps (CC0, ambientCG; see assets/surface/LICENSE.txt), packed by channel:
+/// grain = normal XY, roughness, dust; scratches = normal XY, scratch mask, brushed mask.
+const SURFACE_MAPS: [&[u8]; 2] = [include_bytes!("../../assets/surface/grain.png"), include_bytes!("../../assets/surface/scratches.png")];
+const SURFACE_SIZE: u32 = 1024;
+const SURFACE_MIPS: u32 = 11;
+
+/// The surface maps are decoded on first use, on a worker thread, so they never slow startup.
+enum SurfaceMaps {
+    Unused,
+    Decoding(std::sync::mpsc::Receiver<Vec<Vec<Vec<u8>>>>),
+    Ready,
 }
 
 /// One mesh analysis marker (see `qa`): an edge from `a` to `b`, or a vertex at `a`.
@@ -225,6 +239,8 @@ pub struct Renderer {
     queue: wgpu::Queue,
     globals_buf: wgpu::Buffer,
     globals_bg: wgpu::BindGroup,
+    surface_tex: wgpu::Texture,
+    surface_maps: SurfaceMaps,
     object_bgl: wgpu::BindGroupLayout,
     object_buf: wgpu::Buffer,
     object_bg: wgpu::BindGroup,
@@ -305,6 +321,17 @@ impl Renderer {
                 tex_entry(5, true),
                 tex_entry(6, true),
                 sampler_entry(7),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                sampler_entry(9),
             ],
         });
         let object_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -402,6 +429,22 @@ impl Renderer {
             ..Default::default()
         });
 
+        // Allocated now (GPU memory only), filled when a material first needs it.
+        let surface_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("surface maps"),
+            size: wgpu::Extent3d { width: SURFACE_SIZE, height: SURFACE_SIZE, depth_or_array_layers: SURFACE_MAPS.len() as u32 },
+            mip_level_count: SURFACE_MIPS,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let surface_view = surface_tex.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+
         let ibl = ibl::Ibl::new(device, queue);
         let globals_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("globals"),
@@ -418,6 +461,8 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&ibl.irradiance_view) },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&ibl.brdf_view) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&ibl.sampler) },
+                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&surface_view) },
+                wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::Sampler(&material_sampler) },
             ],
         });
 
@@ -443,6 +488,8 @@ impl Renderer {
             queue: queue.clone(),
             globals_buf,
             globals_bg,
+            surface_tex,
+            surface_maps: SurfaceMaps::Unused,
             object_bgl,
             object_buf,
             object_bg,
@@ -997,6 +1044,9 @@ impl Renderer {
         // materials are asked for.
         let neutral = input.print_scale > 0.0 && !s.file_materials;
         self.write_objects(s, neutral);
+        let wants_surface = input.print_scale > 0.0
+            && (s.grain > 0.0 || s.scratches > 0.0 || (neutral && s.material == PartMaterial::Metal));
+        let surface_ready = self.surface_maps_ready(wants_surface);
 
         let xray = s.xray();
         let wire_mode = s.shading == ShadingMode::Wireframe;
@@ -1058,17 +1108,28 @@ impl Renderer {
             markers: [s.show_non_manifold as u32, s.show_open_edges as u32, s.show_overlapping as u32, 0],
             section: input.section.unwrap_or([0.0; 4]),
             normals: [if s.show_normals { input.normal_length } else { 0.0 }, s.show_face_orientation as u32 as f32, 0.0, 0.0],
-            display: [(s.up_axis == crate::axes::UpAxis::Y) as u32 as f32, neutral as u32 as f32, if neutral { s.surface_imperfection.clamp(0.0, 1.0) } else { 0.0 }, 0.0],
-            // The scale (w) also sizes the surface imperfection in Solid; the finish id only counts in Rendered.
+            display: [(s.up_axis == crate::axes::UpAxis::Y) as u32 as f32, neutral as u32 as f32, 0.0, 0.0],
+            // The material only shows in Rendered; layer lines need a height.
             finish: if input.print_scale > 0.0 {
-                let id = if rendered { s.finish.shader_id() } else { 0 };
-                [id as f32, s.layer_height.max(0.01) * input.print_scale, 0.0, input.print_scale]
+                let id = if rendered && neutral { s.material.shader_id() } else { 0 };
+                let layers = s.layer_lines && s.material.layer_height() > 0.0;
+                let height = if layers { s.layer_height.max(0.01) * input.print_scale } else { 0.0 };
+                let metal = MetalFinish::ALL.iter().position(|f| *f == s.metal_finish).unwrap_or(0);
+                [id as f32, height, metal as f32, input.print_scale]
             } else {
                 [0.0; 4]
             },
             finish_color: {
                 let c = srgb_to_linear(s.plastic_color);
                 [c[0], c[1], c[2], 1.0]
+            },
+            // Wear in Manufacturing, once its maps are on the GPU: grain and scratch strength,
+            // then the size of one map tile in world units.
+            surface: if input.print_scale > 0.0 && surface_ready {
+                let size = s.grain_size.clamp(0.2, 5.0) * input.print_scale;
+                [s.grain.clamp(0.0, 1.0), s.scratches.clamp(0.0, 1.0), 30.0 * size, 50.0 * size]
+            } else {
+                [0.0; 4]
             },
         };
         self.queue.write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
@@ -1372,6 +1433,56 @@ impl Renderer {
         };
         self.pick_buf.unmap();
         ((id > 0).then(|| id as usize - 1), depth)
+    }
+}
+
+impl Renderer {
+    /// Whether the surface maps are on the GPU. The first time they're wanted, a worker thread
+    /// decodes them; until it's done materials render without wear.
+    fn surface_maps_ready(&mut self, wanted: bool) -> bool {
+        match &self.surface_maps {
+            SurfaceMaps::Ready => return true,
+            SurfaceMaps::Unused if wanted => {
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let layers = SURFACE_MAPS
+                        .iter()
+                        .map(|png| {
+                            let rgba = image::load_from_memory_with_format(png, image::ImageFormat::Png)
+                                .map(|i| i.to_rgba8().into_raw())
+                                .unwrap_or_else(|_| vec![128; (SURFACE_SIZE * SURFACE_SIZE * 4) as usize]);
+                            polyloupe_core::loader::build_mips(SURFACE_SIZE, SURFACE_SIZE, rgba)
+                        })
+                        .collect();
+                    let _ = tx.send(layers);
+                });
+                self.surface_maps = SurfaceMaps::Decoding(rx);
+            }
+            SurfaceMaps::Decoding(rx) => {
+                if let Ok(layers) = rx.try_recv() {
+                    for (layer, mips) in layers.iter().enumerate() {
+                        for (level, data) in mips.iter().enumerate().take(SURFACE_MIPS as usize) {
+                            let w = (SURFACE_SIZE >> level).max(1);
+                            self.queue.write_texture(
+                                wgpu::TexelCopyTextureInfo {
+                                    texture: &self.surface_tex,
+                                    mip_level: level as u32,
+                                    origin: wgpu::Origin3d { x: 0, y: 0, z: layer as u32 },
+                                    aspect: wgpu::TextureAspect::All,
+                                },
+                                data,
+                                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(w) },
+                                wgpu::Extent3d { width: w, height: w, depth_or_array_layers: 1 },
+                            );
+                        }
+                    }
+                    self.surface_maps = SurfaceMaps::Ready;
+                    return true;
+                }
+            }
+            SurfaceMaps::Unused => {}
+        }
+        false
     }
 }
 

@@ -102,60 +102,128 @@ impl Workspace {
     }
 }
 
-/// Procedural look of a printed part (Manufacturing workspace): layer lines, grain, and the
-/// material's sheen, projected in world space so no UVs are needed.
+/// What a part is made of (Manufacturing workspace). Rendered mode shows its sheen, layer lines
+/// and texture, procedural or projected in world space so no UVs are needed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Finish {
-    Off,
+pub enum PartMaterial {
     Pla,
+    PlaSilk,
     Petg,
-    SilkPla,
+    Abs,
     Resin,
     Nylon,
     Metal,
 }
 
-impl Finish {
-    pub const ALL: [Finish; 7] = [Finish::Off, Finish::Pla, Finish::Petg, Finish::SilkPla, Finish::Resin, Finish::Nylon, Finish::Metal];
+/// The families the material picker shows first; FDM plastic and metal have a second row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MaterialGroup {
+    Fdm,
+    Resin,
+    Nylon,
+    Metal,
+}
+
+impl MaterialGroup {
+    pub const ALL: [MaterialGroup; 4] = [MaterialGroup::Fdm, MaterialGroup::Resin, MaterialGroup::Nylon, MaterialGroup::Metal];
 
     pub fn label(self) -> &'static str {
         match self {
-            Finish::Off => "None",
-            Finish::Pla => "PLA",
-            Finish::Petg => "PETG",
-            Finish::SilkPla => "Silk PLA",
-            Finish::Resin => "Resin",
-            Finish::Nylon => "Nylon SLS",
-            Finish::Metal => "Metal SLM",
+            MaterialGroup::Fdm => "FDM plastic",
+            MaterialGroup::Resin => "Resin",
+            MaterialGroup::Nylon => "Nylon SLS",
+            MaterialGroup::Metal => "Metal",
+        }
+    }
+
+    /// The material a click on the family picks.
+    pub fn first(self) -> PartMaterial {
+        match self {
+            MaterialGroup::Fdm => PartMaterial::Pla,
+            MaterialGroup::Resin => PartMaterial::Resin,
+            MaterialGroup::Nylon => PartMaterial::Nylon,
+            MaterialGroup::Metal => PartMaterial::Metal,
+        }
+    }
+}
+
+impl PartMaterial {
+    pub const FDM: [PartMaterial; 4] = [PartMaterial::Pla, PartMaterial::PlaSilk, PartMaterial::Petg, PartMaterial::Abs];
+
+    pub fn group(self) -> MaterialGroup {
+        match self {
+            PartMaterial::Pla | PartMaterial::PlaSilk | PartMaterial::Petg | PartMaterial::Abs => MaterialGroup::Fdm,
+            PartMaterial::Resin => MaterialGroup::Resin,
+            PartMaterial::Nylon => MaterialGroup::Nylon,
+            PartMaterial::Metal => MaterialGroup::Metal,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PartMaterial::Pla => "PLA",
+            PartMaterial::PlaSilk => "PLA Silk",
+            PartMaterial::Petg => "PETG",
+            PartMaterial::Abs => "ABS",
+            PartMaterial::Resin => "Resin",
+            PartMaterial::Nylon => "Nylon SLS",
+            PartMaterial::Metal => "Metal",
         }
     }
 
     pub fn description(self) -> &'static str {
         match self {
-            Finish::Off => "Smooth satin plastic, no layer lines",
-            Finish::Pla => "FDM, matte, visible layer lines",
-            Finish::Petg => "FDM, glossy, visible layer lines",
-            Finish::SilkPla => "FDM, satin metallic sheen",
-            Finish::Resin => "SLA/MSLA, smooth with fine layers",
-            Finish::Nylon => "Powder bed, grainy and matte",
-            Finish::Metal => "Laser-sintered metal, grainy",
+            PartMaterial::Pla => "Matte, visible layer lines",
+            PartMaterial::PlaSilk => "Satin metallic sheen, layer lines",
+            PartMaterial::Petg => "Glossy, visible layer lines",
+            PartMaterial::Abs => "Satin, visible layer lines",
+            PartMaterial::Resin => "SLA/MSLA, smooth with fine layers",
+            PartMaterial::Nylon => "Powder bed, grainy and matte",
+            PartMaterial::Metal => "Machined or sintered metal",
         }
     }
 
-    /// Typical layer height in millimeters.
+    /// Typical layer height in millimeters; 0 for parts without visible layers.
     pub fn layer_height(self) -> f32 {
-        match self {
-            Finish::Off => 0.0,
-            Finish::Pla | Finish::Petg | Finish::SilkPla => 0.2,
-            Finish::Resin => 0.05,
-            Finish::Nylon => 0.1,
-            Finish::Metal => 0.04,
+        match self.group() {
+            MaterialGroup::Fdm => 0.2,
+            MaterialGroup::Resin => 0.05,
+            MaterialGroup::Nylon | MaterialGroup::Metal => 0.0,
         }
     }
 
-    /// Index the mesh shader switches on (0 = off).
+    /// Index the mesh shader switches on (1..).
     pub fn shader_id(self) -> u32 {
-        Finish::ALL.iter().position(|f| *f == self).unwrap_or(0) as u32
+        match self {
+            PartMaterial::Pla => 1,
+            PartMaterial::PlaSilk => 2,
+            PartMaterial::Petg => 3,
+            PartMaterial::Abs => 4,
+            PartMaterial::Resin => 5,
+            PartMaterial::Nylon => 6,
+            PartMaterial::Metal => 7,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MetalFinish {
+    Polished,
+    Satin,
+    Brushed,
+    Blasted,
+}
+
+impl MetalFinish {
+    pub const ALL: [MetalFinish; 4] = [MetalFinish::Polished, MetalFinish::Satin, MetalFinish::Brushed, MetalFinish::Blasted];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            MetalFinish::Polished => "Polished",
+            MetalFinish::Satin => "Satin",
+            MetalFinish::Brushed => "Brushed",
+            MetalFinish::Blasted => "Blasted",
+        }
     }
 }
 
@@ -249,16 +317,20 @@ pub struct Settings {
     /// Pick the workspace from the file type; otherwise `workspace` always.
     pub auto_workspace: bool,
     pub workspace: Workspace,
-    /// Print finish (Manufacturing workspace, Rendered mode) and its layer height in millimeters.
-    pub finish: Finish,
-    pub layer_height: f32,
-    /// Manufacturing shows every part as plain plastic of `plastic_color` (sRGB; a new name, so an old filament choice no longer applies), ignoring the
-    /// file's materials and textures, unless this is on. 3D Art always uses the file's own.
+    /// Manufacturing: every part in one color (`plastic_color`, sRGB) and `material`, or the
+    /// file's own materials when `file_materials` is on. 3D Art always uses the file's own.
     pub file_materials: bool,
     pub plastic_color: [u8; 3],
-    /// Rendered mode in Manufacturing: 0..1 strength of the subtle global surface imperfection
-    /// (micro relief and uneven gloss) that makes a part look less like a perfect CG surface.
-    pub surface_imperfection: f32,
+    pub material: PartMaterial,
+    pub metal_finish: MetalFinish,
+    /// FDM and resin layer lines (Rendered mode), and their height in millimeters.
+    pub layer_lines: bool,
+    pub layer_height: f32,
+    /// Surface wear over any material, 0..1: fine grain and dust, and scratches. `grain_size`
+    /// scales both patterns (1 = default size).
+    pub grain: f32,
+    pub scratches: f32,
+    pub grain_size: f32,
 }
 
 impl Default for Settings {
@@ -318,11 +390,15 @@ impl Default for Settings {
             recent_files: Vec::new(),
             auto_workspace: true,
             workspace: Workspace::Art,
-            finish: Finish::Pla,
             layer_height: 0.2,
             file_materials: false,
             plastic_color: [200, 200, 196],
-            surface_imperfection: 0.25,
+            material: PartMaterial::Pla,
+            metal_finish: MetalFinish::Satin,
+            layer_lines: true,
+            grain: 0.3,
+            scratches: 0.0,
+            grain_size: 1.0,
         }
     }
 }
