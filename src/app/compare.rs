@@ -131,6 +131,7 @@ impl ViewerApp {
         let normal_length = self.normal_length();
         let (grid_cell, grid_fade, grid_axis) = grid_params(&self.camera);
         let print_scale = self.print_scale();
+        let scene = None;
         let (Some(c), Some(rs)) = (&mut self.compare, frame.wgpu_render_state()) else { return };
         let target = match c.mode {
             CompareMode::SideBySide => Rect::from_min_max(pos2((rect.center().x + 1.0).round(), rect.min.y), rect.max),
@@ -153,6 +154,7 @@ impl ViewerApp {
             section,
             normal_length,
             print_scale,
+            scene,
         };
         let texture = {
             let mut egui_renderer = rs.renderer.write();

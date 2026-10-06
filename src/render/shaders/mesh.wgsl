@@ -33,6 +33,56 @@ struct MaterialU {
 // Surface wear maps (layer 0 grain, 1 scratches), see `SURFACE_MAPS`.
 @group(0) @binding(8) var surface_tex: texture_2d_array<f32>;
 @group(0) @binding(9) var surface_samp: sampler;
+// Shadow maps (layer 0 key light, 1 straight down), see `shadow.wgsl`.
+@group(0) @binding(10) var shadow_tex: texture_depth_2d_array;
+@group(0) @binding(11) var shadow_samp: sampler_comparison;
+
+const SHADOW_SIZE: f32 = 2048.0;
+
+// How lit `p` is from shadow map `layer` (1 = lit), filtered over a square of taps `radius`
+// texels apart. Outside the map counts as lit.
+fn shadow_at(p: vec3<f32>, layer: i32, m: mat4x4<f32>, radius: f32) -> f32 {
+    let c = m * vec4<f32>(p, 1.0);
+    let uv = vec2<f32>(c.x * 0.5 + 0.5, 0.5 - c.y * 0.5);
+    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || c.z > 1.0 {
+        return 1.0;
+    }
+    let texel = radius / SHADOW_SIZE;
+    var sum = 0.0;
+    for (var y = -2; y <= 2; y++) {
+        for (var x = -2; x <= 2; x++) {
+            let o = vec2<f32>(f32(x), f32(y)) * texel;
+            sum += textureSampleCompareLevel(shadow_tex, shadow_samp, uv + o, layer, c.z - 0.0015);
+        }
+    }
+    return sum / 25.0;
+}
+
+// GGX specular and Lambert diffuse from the key light, shadowed.
+fn key_light(p: vec3<f32>, n: vec3<f32>, v: vec3<f32>, albedo: vec3<f32>, metallic: f32, rough: f32) -> vec3<f32> {
+    let l = g.light.xyz;
+    let nl = dot(n, l);
+    if nl <= 0.0 {
+        return vec3<f32>(0.0);
+    }
+    let lit = shadow_at(p + n * g.shadow.w, 0, g.light0, 1.0 + g.shadow.z);
+    if lit <= 0.0 {
+        return vec3<f32>(0.0);
+    }
+    let h = normalize(l + v);
+    let nv = max(dot(n, v), 1e-4);
+    let nh = max(dot(n, h), 0.0);
+    let a = rough * rough;
+    let a2 = a * a;
+    let d = nh * nh * (a2 - 1.0) + 1.0;
+    let ndf = a2 / (PI * d * d);
+    let k = a * 0.5;
+    let vis = 0.25 / ((nl * (1.0 - k) + k) * (nv * (1.0 - k) + k));
+    let f0 = mix(vec3<f32>(0.04), albedo, metallic);
+    let f = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - max(dot(v, h), 0.0), 5.0);
+    let diffuse = (vec3<f32>(1.0) - f) * (1.0 - metallic) * albedo / PI;
+    return (diffuse + f * ndf * vis) * nl * g.light.w * lit;
+}
 
 @group(1) @binding(0) var<uniform> obj: Object;
 @group(1) @binding(1) var<storage, read> joint_mats: array<mat4x4<f32>>;
@@ -438,6 +488,9 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
             ao *= f.ao;
         }
         color = ibl(n, v, albedo, clamp(metallic, 0.0, 1.0), clamp(rough, 0.03, 1.0)) * ao + emissive;
+        if g.light.w > 0.0 {
+            color += key_light(in.world_pos, n, v, albedo, clamp(metallic, 0.0, 1.0), clamp(rough, 0.05, 1.0)) * ao;
+        }
         color = view_transform(color * g.params.y, g.extra.y);
     } else if cmode == 4u {
         let c = select(vec3<f32>(0.8), in.color.rgb, has(HAS_COLOR));
@@ -482,6 +535,11 @@ fn vs_full(@builtin(vertex_index) i: u32) -> FullOut {
 
 @fragment
 fn fs_background(in: FullOut) -> @location(0) vec4<f32> {
+    // Studio backdrop: light gray, a little brighter towards the top, like a photo sweep.
+    if g.extra.z == 2u {
+        let t = clamp(in.ndc.y * 0.5 + 0.5, 0.0, 1.0);
+        return vec4<f32>(srgb_to_linear(mix(vec3<f32>(0.80), vec3<f32>(0.93), t)), 1.0);
+    }
     let p0 = g.inv_view_proj * vec4<f32>(in.ndc, 1.0, 1.0);
     let p1 = g.inv_view_proj * vec4<f32>(in.ndc, 0.5, 1.0);
     let d = normalize(p1.xyz / p1.w - p0.xyz / p0.w);
@@ -682,4 +740,41 @@ fn fs_id(in: WireOut) -> IdOut {
         discard;
     }
     return IdOut(obj.info.x, in.clip.z);
+}
+
+// --- Shadow floor (Rendered mode) ---
+// A disc under the model that only darkens what's behind it: the key light's shadow and soft
+// contact shading where the model is close above. Fades out towards its rim.
+
+struct FloorOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) world_pos: vec3<f32>,
+};
+
+@vertex
+fn vs_floor(@builtin(vertex_index) i: u32) -> FloorOut {
+    let corners = array<vec2<f32>, 6>(
+        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
+        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0),
+    );
+    let p = vec3<f32>(g.floor.xy + corners[i] * g.floor.z, g.shadow.y);
+    var out: FloorOut;
+    out.clip = g.view_proj * vec4<f32>(p, 1.0);
+    out.world_pos = p;
+    return out;
+}
+
+@fragment
+fn fs_floor(in: FloorOut) -> @location(0) vec4<f32> {
+    let p = in.world_pos;
+    let r = length(p.xy - g.floor.xy) / g.floor.z;
+    let fade = 1.0 - smoothstep(0.45, 1.0, r);
+    var dark = 0.0;
+    if g.light.w > 0.0 && g.light.z > 0.0 {
+        dark += (1.0 - shadow_at(p + vec3<f32>(0.0, 0.0, g.shadow.w), 0, g.light0, 1.5 + g.shadow.z * 1.5)) * 0.55;
+    }
+    // Contact: how much of the model is right above, blurred wide.
+    let contact = 1.0 - shadow_at(p + vec3<f32>(0.0, 0.0, g.shadow.w), 1, g.light1, 4.0 + g.shadow.z * 2.0);
+    dark += contact * 0.45;
+    return vec4<f32>(0.0, 0.0, 0.0, clamp(dark, 0.0, 0.85) * fade);
 }

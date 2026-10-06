@@ -331,6 +331,16 @@ pub struct Settings {
     pub grain: f32,
     pub scratches: f32,
     pub grain_size: f32,
+    /// Rendered mode: a key light taken from the environment's brightest spot, casting shadows
+    /// on the model, and a floor under it that catches its shadow and contact shading.
+    pub shadows: bool,
+    /// Rendered mode: a light studio backdrop (a soft gradient, no grid) instead of the
+    /// viewport's dark gray. `env_background` wins over it.
+    pub studio_backdrop: bool,
+    pub floor_shadow: bool,
+    pub light_strength: f32,
+    /// 0 = crisp, 1 = very soft.
+    pub shadow_softness: f32,
 }
 
 impl Default for Settings {
@@ -399,6 +409,11 @@ impl Default for Settings {
             grain: 0.3,
             scratches: 0.0,
             grain_size: 1.0,
+            shadows: true,
+            studio_backdrop: false,
+            floor_shadow: true,
+            light_strength: 1.0,
+            shadow_softness: 0.4,
         }
     }
 }

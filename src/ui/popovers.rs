@@ -365,11 +365,33 @@ fn rendered(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails) -> Option<Po
     });
     ui.add(egui::Slider::new(&mut s.env_rotation, -180.0..=180.0).suffix("°").text(tr("Rotation")));
     ui.add(egui::Slider::new(&mut s.env_strength, 0.0..=4.0).text(tr("Strength")));
-    ui.checkbox(&mut s.env_background, tr("World background"));
-    ui.add_enabled_ui(s.env_background, |ui| {
-        ui.add(egui::Slider::new(&mut s.env_blur, 0.0..=1.0).text(tr("Blur")));
+    widgets::section(ui, "Background");
+    // Three choices over two settings: the world wins over the studio backdrop.
+    let mut backdrop = if s.env_background { 2 } else if s.studio_backdrop { 1 } else { 0 };
+    ui.horizontal(|ui| {
+        if widgets::segmented(ui, &mut backdrop, &[(0, "Viewport"), (1, "Studio"), (2, "World")]) {
+            s.env_background = backdrop == 2;
+            s.studio_backdrop = backdrop == 1;
+        }
     });
-    ui.add_space(4.0);
+    if s.env_background {
+        ui.add(egui::Slider::new(&mut s.env_blur, 0.0..=1.0).text(tr("Blur")));
+    } else if s.studio_backdrop {
+        ui.label(RichText::new(tr("Light gray sweep without the grid, for product shots")).size(11.0).color(theme::TEXT_DIM));
+    }
+
+    widgets::section(ui, "Light and Shadows");
+    ui.checkbox(&mut s.shadows, tr("Key light shadows"))
+        .on_hover_text(tr("A light from the environment's brightest spot, casting shadows; it turns with the environment"));
+    ui.add_enabled_ui(s.shadows, |ui| {
+        ui.add(egui::Slider::new(&mut s.light_strength, 0.0..=3.0).text(tr("Light strength")));
+    });
+    ui.checkbox(&mut s.floor_shadow, tr("Shadow on the floor"))
+        .on_hover_text(tr("A floor under the model that catches its shadow and contact shading"));
+    ui.add_enabled_ui(s.shadows || s.floor_shadow, |ui| {
+        ui.add(egui::Slider::new(&mut s.shadow_softness, 0.0..=1.0).text(tr("Softness")));
+    });
+
     widgets::section(ui, "Color Management");
     ui.horizontal(|ui| {
         widgets::segmented(

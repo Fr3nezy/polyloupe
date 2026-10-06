@@ -41,6 +41,16 @@ struct Globals {
     // Surface wear (Manufacturing): x grain and y scratch strength (0..1), z grain and w scratch
     // map tile size in world units.
     surface: vec4<f32>,
+    // Shadow maps: the key light's and a straight-down one (contact shading on the floor).
+    light0: mat4x4<f32>,
+    light1: mat4x4<f32>,
+    // Key light: xyz unit direction towards the light, w intensity (0 = no key light).
+    light: vec4<f32>,
+    // x 1 to draw the shadow floor, y floor height, z softness (shadow map texels),
+    // w normal offset against shadow acne (world units).
+    shadow: vec4<f32>,
+    // Floor: xy center, z radius of the shaded area (world units).
+    floor: vec4<f32>,
 };
 
 fn section_cuts(world_pos: vec3<f32>) -> bool {

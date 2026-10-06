@@ -567,6 +567,7 @@ impl ViewerApp {
         let section = self.section_plane();
         let normal_length = self.normal_length();
         let print_scale = self.print_scale();
+        let scene = self.scene_frame();
         let renderer = self.renderer.as_mut()?;
         let mut settings = self.settings.clone();
         settings.show_grid = settings.show_overlays && settings.export_grid;
@@ -598,6 +599,7 @@ impl ViewerApp {
             section,
             normal_length,
             print_scale,
+            scene,
         };
         renderer.render(None, size, &input);
         renderer.read_pixels()
@@ -885,6 +887,12 @@ impl ViewerApp {
         } else if self.tool.transforms() {
             self.tool = Tool::Select;
         }
+    }
+
+    /// Where the visible model is, for the shadows and the shadow floor.
+    pub(super) fn scene_frame(&self) -> Option<render::SceneFrame> {
+        let b = self.visible_bounds(false);
+        b.is_valid().then(|| render::SceneFrame { center: b.center(), radius: (b.max - b.min).length() * 0.5, floor: b.min.z })
     }
 
     /// World units per millimeter for the print finish, 0 when it doesn't apply.
@@ -1618,6 +1626,7 @@ impl ViewerApp {
         let normal_length = self.normal_length();
         let effective = self.effective_settings();
         let print_scale = self.print_scale();
+        let scene = self.scene_frame();
         let (Some(renderer), Some(rs)) = (&mut self.renderer, frame.wgpu_render_state()) else {
             ui.painter().rect_filled(rect, 0.0, theme::VIEWPORT);
             return;
@@ -1655,6 +1664,7 @@ impl ViewerApp {
             section,
             normal_length,
             print_scale,
+            scene,
         };
         let texture = {
             let mut egui_renderer = rs.renderer.write();

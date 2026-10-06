@@ -252,6 +252,21 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Move down until it touches the bed (B)" => "Abbassa finché tocca il piano (B)",
         "Back to the position in the file (Alt G)" => "Torna alla posizione del file (Alt G)",
         "Tools" => "Strumenti",
+        "Background" => "Sfondo",
+        "Studio" => "Studio",
+        "World" => "Ambiente",
+        "Light gray sweep without the grid, for product shots" => "Fondale grigio chiaro senza griglia, per foto di prodotto",
+        "Light and Shadows" => "Luci e ombre",
+        "Key light shadows" => "Ombre della luce principale",
+        "A light from the environment's brightest spot, casting shadows; it turns with the environment" => {
+            "Una luce dal punto più luminoso dell'ambiente, che proietta ombre; ruota con l'ambiente"
+        }
+        "Light strength" => "Intensità luce",
+        "Shadow on the floor" => "Ombra sul pavimento",
+        "A floor under the model that catches its shadow and contact shading" => {
+            "Un pavimento sotto il modello che riceve la sua ombra e l'ombra di contatto"
+        }
+        "Softness" => "Morbidezza",
         "One color" => "Colore unico",
         "FDM plastic" => "Plastica FDM",
         "Metal" => "Metallo",

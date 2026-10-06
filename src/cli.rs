@@ -120,6 +120,11 @@ impl CaptureOptions {
                     }
                 }
                 "--env-bg" => s.env_background = true,
+                "--studio" => s.studio_backdrop = true,
+                "--no-shadows" => {
+                    s.shadows = false;
+                    s.floor_shadow = false;
+                }
                 "--export-scale" => s.export_scale = v.parse().unwrap_or(2),
                 "--budget" => s.triangle_budget = v.parse().unwrap_or(0),
                 "--up" => {
@@ -262,7 +267,7 @@ pub fn parse() -> Result<LaunchOptions, String> {
                 let v = value(&arg)?;
                 capture.settings.push((arg, Some(v)));
             }
-            "--xray" | "--no-xray" | "--wire-overlay" | "--no-grid" | "--fps" | "--env-bg" | "--sidebar"
+            "--xray" | "--no-xray" | "--studio" | "--no-shadows" | "--wire-overlay" | "--no-grid" | "--fps" | "--env-bg" | "--sidebar"
             | "--file-materials" | "--no-overlays" | "--no-outline" | "--mesh-check" | "--normals" | "--face-orientation" | "--origins" => capture.settings.push((arg, None)),
             flag if flag.starts_with("--") => return Err(format!("unknown option {flag}")),
             _ => opts.open = Some(PathBuf::from(arg)),

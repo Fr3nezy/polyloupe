@@ -62,6 +62,33 @@ struct GlobalsUniform {
     finish: [f32; 4],
     finish_color: [f32; 4],
     surface: [f32; 4],
+    light0: [[f32; 4]; 4],
+    light1: [[f32; 4]; 4],
+    light: [f32; 4],
+    shadow: [f32; 4],
+    floor: [f32; 4],
+}
+
+/// Shadow map size and format; two layers: the key light and a straight-down view.
+const SHADOW_SIZE: u32 = 2048;
+const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+/// Where the scene is, for fitting the shadow maps and placing the floor: bounds center and
+/// radius, and the lowest point (the floor height).
+#[derive(Clone, Copy)]
+pub struct SceneFrame {
+    pub center: Vec3,
+    pub radius: f32,
+    pub floor: f32,
+}
+
+struct Shadows {
+    /// One depth view per layer to render into.
+    layers: [wgpu::TextureView; 2],
+    /// Per layer: the light matrix, and its bind group for the shadow pass.
+    matrices: [wgpu::Buffer; 2],
+    bind_groups: [wgpu::BindGroup; 2],
+    pipeline: wgpu::RenderPipeline,
 }
 
 /// Surface wear maps (CC0, ambientCG; see assets/surface/LICENSE.txt), packed by channel:
@@ -166,6 +193,8 @@ pub struct FrameInput<'a> {
     /// World units per millimeter when the print finish applies (Manufacturing workspace),
     /// 0 otherwise.
     pub print_scale: f32,
+    /// Shadows and the shadow floor (Rendered mode) need to know where the scene is.
+    pub scene: Option<SceneFrame>,
 }
 
 struct GpuMesh {
@@ -230,6 +259,7 @@ struct Pipelines {
     normals: wgpu::RenderPipeline,
     grid: wgpu::RenderPipeline,
     background: wgpu::RenderPipeline,
+    floor: wgpu::RenderPipeline,
     id: wgpu::RenderPipeline,
     outline: wgpu::RenderPipeline,
 }
@@ -241,6 +271,9 @@ pub struct Renderer {
     globals_bg: wgpu::BindGroup,
     surface_tex: wgpu::Texture,
     surface_maps: SurfaceMaps,
+    shadows: Shadows,
+    /// Direction of the environment's brightest spot (environment space, before rotation).
+    key_light: std::cell::Cell<Vec3>,
     object_bgl: wgpu::BindGroupLayout,
     object_buf: wgpu::Buffer,
     object_bg: wgpu::BindGroup,
@@ -332,6 +365,22 @@ impl Renderer {
                     count: None,
                 },
                 sampler_entry(9),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
             ],
         });
         let object_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -445,6 +494,29 @@ impl Renderer {
             ..Default::default()
         });
 
+        let shadow_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shadow maps"),
+            size: wgpu::Extent3d { width: SHADOW_SIZE, height: SHADOW_SIZE, depth_or_array_layers: 2 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: SHADOW_FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let shadow_view = shadow_tex.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("shadow"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            ..Default::default()
+        });
+        let shadows = create_shadows(device, &shadow_tex, &object_bgl);
+
         let ibl = ibl::Ibl::new(device, queue);
         let globals_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("globals"),
@@ -463,6 +535,8 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&ibl.sampler) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&surface_view) },
                 wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::Sampler(&material_sampler) },
+                wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::TextureView(&shadow_view) },
+                wgpu::BindGroupEntry { binding: 11, resource: wgpu::BindingResource::Sampler(&shadow_sampler) },
             ],
         });
 
@@ -490,6 +564,8 @@ impl Renderer {
             globals_bg,
             surface_tex,
             surface_maps: SurfaceMaps::Unused,
+            shadows,
+            key_light: std::cell::Cell::new(DEFAULT_KEY_LIGHT),
             object_bgl,
             object_buf,
             object_bg,
@@ -530,6 +606,7 @@ impl Renderer {
 
     pub fn set_environment(&self, env: &EnvImage) {
         self.ibl.set_environment(&self.device, &self.queue, env);
+        self.key_light.set(brightest_direction(env));
     }
 
     /// Whether every mesh buffer fits this GPU's largest buffer: wgpu treats an oversized buffer
@@ -1056,6 +1133,33 @@ impl Renderer {
         let need_ids = !self.meshes.is_empty() && (object_outline || any_selected || input.pick.is_some());
 
         let view_proj = input.proj * input.view;
+        // Shadows: the key light from the environment's brightest spot (turned with the
+        // environment), plus a straight-down view for contact shading on the floor.
+        let shadow_frame = input.scene.filter(|_| rendered && !xray && (s.shadows || s.floor_shadow));
+        let key_dir = {
+            let d = self.key_light.get();
+            let (sin, cos) = s.env_rotation.to_radians().sin_cos();
+            // Never lower than 25 degrees, so shadows stay on the floor near the model.
+            let d = Vec3::new(cos * d.x - sin * d.y, sin * d.x + cos * d.y, d.z);
+            let flat = Vec3::new(d.x, d.y, 0.0).normalize_or(Vec3::X);
+            let elevation = d.z.clamp(-1.0, 1.0).asin().max(25f32.to_radians());
+            (flat * elevation.cos() + Vec3::Z * elevation.sin()).normalize()
+        };
+        let (light0, light1) = match shadow_frame {
+            Some(f) => {
+                let c = Vec3::new(f.center.x, f.center.y, f.center.z);
+                let r = f.radius.max(1e-6);
+                // Shadows fall up to height / tan(elevation) away from the model.
+                let reach = r * (1.0 + 1.0 / key_dir.z.asin().tan()).min(4.0);
+                let view = |dir: Vec3, half: f32| {
+                    let up = if dir.z.abs() > 0.99 { Vec3::Y } else { Vec3::Z };
+                    glam::camera::rh::proj::directx::orthographic(-half, half, -half, half, 0.0, 6.0 * r)
+                        * glam::camera::rh::view::look_at_mat4(c + dir * 3.0 * r, c, up)
+                };
+                (view(key_dir, reach), view(Vec3::Z, r * 1.5))
+            }
+            None => (Mat4::IDENTITY, Mat4::IDENTITY),
+        };
         let globals = GlobalsUniform {
             view_proj: view_proj.to_cols_array_2d(),
             inv_view_proj: view_proj.inverse().to_cols_array_2d(),
@@ -1085,7 +1189,7 @@ impl Renderer {
             extra: [
                 TexturePass::ALL.iter().position(|p| *p == s.texture_pass).unwrap_or(0) as u32,
                 (s.view_transform == ViewTransform::AgX) as u32,
-                (rendered && s.env_background) as u32,
+                if rendered && s.env_background { 1 } else if rendered && s.studio_backdrop { 2 } else { 0 },
                 object_outline as u32,
             ],
             params: [
@@ -1131,8 +1235,27 @@ impl Renderer {
             } else {
                 [0.0; 4]
             },
+            light0: light0.to_cols_array_2d(),
+            light1: light1.to_cols_array_2d(),
+            light: match shadow_frame {
+                Some(_) if s.shadows => [key_dir.x, key_dir.y, key_dir.z, s.light_strength * s.env_strength * 2.0],
+                _ => [0.0; 4],
+            },
+            shadow: match shadow_frame {
+                Some(f) => [s.floor_shadow as u32 as f32, f.floor, 1.0 + s.shadow_softness.clamp(0.0, 1.0) * 5.0, f.radius * 0.004],
+                None => [0.0; 4],
+            },
+            floor: match shadow_frame {
+                Some(f) => [f.center.x, f.center.y, f.radius * 4.0, 0.0],
+                None => [0.0; 4],
+            },
         };
         self.queue.write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
+        if shadow_frame.is_some() {
+            for (buf, m) in self.shadows.matrices.iter().zip([light0, light1]) {
+                self.queue.write_buffer(buf, 0, bytemuck::bytes_of(&m.to_cols_array_2d()));
+            }
+        }
 
         let mut encoder = self
             .device
@@ -1177,6 +1300,26 @@ impl Renderer {
             self.draw_positions_only(&mut pass, false);
         }
 
+        if shadow_frame.is_some() {
+            for layer in 0..2 {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("shadow map"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.shadows.layers[layer],
+                        depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.shadows.pipeline);
+                pass.set_bind_group(0, &self.shadows.bind_groups[layer], &[]);
+                self.draw_positions_only(&mut pass, false);
+            }
+        }
+
         {
             let bg = srgb_to_linear(BACKGROUND);
             let clear = if input.transparent {
@@ -1209,8 +1352,8 @@ impl Renderer {
             });
             pass.set_bind_group(0, &self.globals_bg, &[]);
 
-            // 1. World background (Rendered).
-            if rendered && s.env_background {
+            // 1. World background or studio backdrop (Rendered).
+            if rendered && (s.env_background || s.studio_backdrop) {
                 pass.set_pipeline(&self.pipes.background);
                 pass.draw(0..3, 0..1);
             }
@@ -1238,10 +1381,15 @@ impl Renderer {
                 }
             }
 
-            // 3. Floor grid, depth-tested against the surfaces.
-            if s.show_grid {
+            // 3. Floor grid, depth-tested against the surfaces, and the shadow floor. The studio
+            // backdrop is for clean shots: no grid.
+            if s.show_grid && !(rendered && s.studio_backdrop && !s.env_background) {
                 pass.set_pipeline(&self.pipes.grid);
                 pass.draw(0..3, 0..1);
+            }
+            if shadow_frame.is_some() && s.floor_shadow {
+                pass.set_pipeline(&self.pipes.floor);
+                pass.draw(0..6, 0..1);
             }
 
             // 4. Transparent materials, back to front.
@@ -1810,6 +1958,22 @@ fn create_pipelines(
             write_mask: all,
             second: None,
         }),
+        floor: build(Desc {
+            label: "shadow floor",
+            layout: &globals_layout,
+            module: &mesh_module,
+            vs: "vs_floor",
+            fs: "fs_floor",
+            buffers: &[],
+            topology: Topo::TriangleList,
+            depth: Some((false, Cmp::Greater)),
+            cull: None,
+            samples: SAMPLES,
+            format: COLOR_FORMAT,
+            blend: alpha,
+            write_mask: all,
+            second: None,
+        }),
         background: build(Desc {
             label: "background",
             layout: &globals_layout,
@@ -1899,4 +2063,116 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{name}: {e:?}"));
         }
     }
+}
+
+/// Key light when the environment has no clear sun: high, from the front left, like a studio.
+const DEFAULT_KEY_LIGHT: Vec3 = Vec3::new(-0.42, -0.55, 0.72);
+
+/// Direction of the environment's brightest spot (its sun or main softbox), or the default
+/// studio light when nothing stands out from the rest of the sky.
+fn brightest_direction(env: &EnvImage) -> Vec3 {
+    let (w, h) = (env.width as usize, env.height as usize);
+    if w == 0 || h == 0 {
+        return DEFAULT_KEY_LIGHT.normalize();
+    }
+    let step = (w / 256).max(1);
+    let (mut best, mut best_at, mut sum, mut n) = (0.0f32, (0, 0), 0.0f32, 0usize);
+    for y in (0..h).step_by(step) {
+        for x in (0..w).step_by(step) {
+            let p = env.pixels[y * w + x];
+            let lum = 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2];
+            sum += lum;
+            n += 1;
+            if lum > best {
+                best = lum;
+                best_at = (x, y);
+            }
+        }
+    }
+    if n == 0 || best < 4.0 * sum / n as f32 {
+        return DEFAULT_KEY_LIGHT.normalize();
+    }
+    // Inverse of the shaders' equirect_uv: u = 0.5 - atan2(y, x) / 2pi, v = acos(z) / pi.
+    let u = (best_at.0 as f32 + 0.5) / w as f32;
+    let v = (best_at.1 as f32 + 0.5) / h as f32;
+    let phi = (0.5 - u) * std::f32::consts::TAU;
+    let theta = v * std::f32::consts::PI;
+    Vec3::new(theta.sin() * phi.cos(), theta.sin() * phi.sin(), theta.cos())
+}
+
+fn create_shadows(device: &wgpu::Device, texture: &wgpu::Texture, object_bgl: &wgpu::BindGroupLayout) -> Shadows {
+    let layers = [0, 1].map(|layer| {
+        texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            base_array_layer: layer,
+            array_layer_count: Some(1),
+            ..Default::default()
+        })
+    });
+    let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("shadow light"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+            count: None,
+        }],
+    });
+    let matrices = [0, 1].map(|_| {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("shadow light"),
+            size: 64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    });
+    let bind_groups = [0, 1].map(|i| {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("shadow light"),
+            layout: &bgl,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: matrices[i].as_entire_binding() }],
+        })
+    });
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("shadow"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shadow.wgsl").into()),
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("shadow"),
+        bind_group_layouts: &[Some(&bgl), Some(object_bgl)],
+        immediate_size: 0,
+    });
+    let attr = |location, format| [wgpu::VertexAttribute { format, offset: 0, shader_location: location }];
+    let (pos, joints, weights) = (
+        attr(0, wgpu::VertexFormat::Float32x3),
+        attr(5, wgpu::VertexFormat::Uint16x4),
+        attr(6, wgpu::VertexFormat::Float32x4),
+    );
+    let buffer = |attributes: &'static [wgpu::VertexAttribute]| wgpu::VertexBufferLayout {
+        array_stride: attributes[0].format.size(),
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes,
+    };
+    let (pos, joints, weights): (&'static [_; 1], &'static [_; 1], &'static [_; 1]) =
+        (Box::leak(Box::new(pos)), Box::leak(Box::new(joints)), Box::leak(Box::new(weights)));
+    let buffers = [Some(buffer(pos)), None, None, None, None, Some(buffer(joints)), Some(buffer(weights))];
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("shadow map"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState { module: &module, entry_point: Some("vs_shadow"), compilation_options: Default::default(), buffers: &buffers },
+        // Both sides cast: thin parts and open meshes still throw a shadow.
+        primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: SHADOW_FORMAT,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: Default::default(),
+            bias: wgpu::DepthBiasState { constant: 2, slope_scale: 2.0, clamp: 0.0 },
+        }),
+        multisample: Default::default(),
+        fragment: None,
+        multiview_mask: None,
+        cache: None,
+    });
+    Shadows { layers, matrices, bind_groups, pipeline }
 }
