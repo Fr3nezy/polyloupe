@@ -144,8 +144,6 @@ pub fn shading(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails, manufactu
         }
         ShadingMode::Rendered => action = rendered(ui, s, thumbs),
     }
-    ui.add_space(4.0);
-    ui.separator();
     widgets::section(ui, "Options");
     let mut xray = s.xray();
     if ui.checkbox(&mut xray, tr("X-Ray")).changed() {
@@ -212,7 +210,6 @@ pub fn part_material(ui: &mut Ui, s: &mut Settings) {
             ui.label(RichText::new(tr("Rendered mode shows the material; Solid only its color and relief.")).size(11.0).color(theme::TEXT_FAINT));
         }
     }
-    ui.add_space(8.0);
     widgets::section(ui, "Surface Wear");
     let percent = |v: &mut f32, label: &str, tip: &str, ui: &mut Ui| {
         ui.add(egui::Slider::new(v, 0.0..=1.0)

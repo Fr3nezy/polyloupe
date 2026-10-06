@@ -953,7 +953,11 @@ impl ViewerApp {
         // Viewport settings don't need a model.
         if self.inspector_tab == InspectorTab::Shading {
             ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                Frame::new().inner_margin(Margin::same(16)).show(ui, |ui| self.shading_tab(ui));
+                Frame::new().inner_margin(Margin::same(16)).show(ui, |ui| {
+                    widgets::begin_cards(ui);
+                    self.shading_tab(ui);
+                    widgets::end_cards(ui);
+                });
             });
             return;
         }
@@ -968,12 +972,20 @@ impl ViewerApp {
         match self.inspector_tab {
             InspectorTab::Info => {
                 ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    Frame::new().inner_margin(Margin::same(16)).show(ui, |ui| self.info_tab(ui));
+                    Frame::new().inner_margin(Margin::same(16)).show(ui, |ui| {
+                        widgets::begin_cards(ui);
+                        self.info_tab(ui);
+                        widgets::end_cards(ui);
+                    });
                 });
             }
             InspectorTab::Materials => {
                 ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    Frame::new().inner_margin(Margin::same(16)).show(ui, |ui| self.materials_tab(ui));
+                    Frame::new().inner_margin(Margin::same(16)).show(ui, |ui| {
+                        widgets::begin_cards(ui);
+                        self.materials_tab(ui);
+                        widgets::end_cards(ui);
+                    });
                 });
             }
             InspectorTab::Scene => Frame::new().inner_margin(Margin::same(8)).show(ui, |ui| self.scene_tab(ui)).inner,
@@ -993,14 +1005,9 @@ impl ViewerApp {
             )
         });
         ui.label(RichText::new(tr("The options below change with the mode.")).size(11.0).color(theme::TEXT_DIM));
-        ui.add_space(6.0);
-        ui.painter().hline(ui.max_rect().x_range(), ui.cursor().top(), Stroke::new(1.0, theme::BORDER));
-        ui.add_space(6.0);
         let manufacturing = self.manufacturing();
         if manufacturing && self.settings.shading != ShadingMode::Wireframe {
             popovers::part_material(ui, &mut self.settings);
-            ui.add_space(4.0);
-            ui.separator();
         }
         let action = popovers::shading(ui, &mut self.settings, &mut self.thumbs, manufacturing);
         if let Some(a) = action {

@@ -232,9 +232,58 @@ pub fn segmented_icons<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options:
 
 /// Section title: monospace, uppercase, tracked out, dim.
 pub fn section(ui: &mut Ui, title: &str) {
+    if close_card(ui) {
+        // A card per section (see `begin_cards`): room for the frames and the gap between them.
+        ui.add_space(22.0);
+        let shape = ui.painter().add(egui::Shape::Noop);
+        let top = ui.cursor().top() - 10.0;
+        ui.ctx().data_mut(|d| d.insert_temp(cards_id(), Some(Card { shape, top })));
+        ui.label(theme::caps(tr(title), 11.0, theme::TEXT));
+        ui.add_space(4.0);
+        return;
+    }
     ui.add_space(4.0);
     ui.label(theme::caps(tr(title), 11.0, theme::TEXT_DIM));
     ui.add_space(2.0);
+}
+
+/// A section's card: the background slot reserved under its content, and where it starts.
+#[derive(Clone, Copy)]
+struct Card {
+    shape: egui::layers::ShapeIdx,
+    top: f32,
+}
+
+fn cards_id() -> egui::Id {
+    egui::Id::new("section_cards")
+}
+
+/// From here to `end_cards`, every `section` gets its own framed card, so groups read as
+/// separate blocks instead of one long list (the inspector).
+pub fn begin_cards(ui: &mut Ui) {
+    ui.ctx().data_mut(|d| d.insert_temp::<Option<Card>>(cards_id(), None));
+    ui.add_space(-12.0);
+}
+
+pub fn end_cards(ui: &mut Ui) {
+    close_card(ui);
+    ui.ctx().data_mut(|d| d.remove::<Option<Card>>(cards_id()));
+}
+
+/// Paints the open card's frame behind what was drawn since its section began. Returns whether
+/// cards are on.
+fn close_card(ui: &mut Ui) -> bool {
+    let Some(open) = ui.ctx().data(|d| d.get_temp::<Option<Card>>(cards_id())) else { return false };
+    if let Some(card) = open {
+        let x = ui.max_rect().x_range();
+        let rect = egui::Rect::from_x_y_ranges(x.min - 10.0..=x.max + 10.0, card.top..=ui.cursor().top() + 8.0);
+        ui.painter().set(
+            card.shape,
+            egui::epaint::RectShape::new(rect, CornerRadius::same(6), Color32::from_rgb(0x0c, 0x0c, 0x0c), Stroke::new(1.0, theme::BORDER), egui::StrokeKind::Inside),
+        );
+    }
+    ui.ctx().data_mut(|d| d.insert_temp::<Option<Card>>(cards_id(), None));
+    true
 }
 
 
