@@ -363,14 +363,14 @@ pub fn manufacturing(p: &Painter, rect: Rect, color: Color32) {
     p.circle_stroke(g(8.0, 8.0), 2.6 * k, s);
 }
 
-/// 3D Art workspace: a paintbrush, tilted, with its bristles filled.
+/// 3D Art workspace: a paintbrush, tilted: handle, metal ferrule, and the bristles bending to a
+/// point, filled so it weighs as much as the Manufacturing nut next to it.
 pub fn art(p: &Painter, rect: Rect, color: Color32) {
     let g = grid(rect, 16.0);
-    let s = stroke_for(rect, 16.0, 1.4, color);
-    // Handle, then the metal ferrule, then the bristles bending to a point.
-    p.line_segment([g(14.0, 2.0), g(9.2, 6.8)], s);
-    p.add(Shape::convex_polygon(vec![g(9.6, 5.0), g(11.0, 6.4), g(8.6, 8.8), g(7.2, 7.4)], color, Stroke::NONE));
-    p.add(Shape::convex_polygon(vec![g(7.0, 7.6), g(8.4, 9.0), g(6.4, 12.4), g(2.0, 14.0), g(3.6, 9.6)], color, Stroke::NONE));
+    let s = stroke_for(rect, 16.0, 2.2, color);
+    p.line_segment([g(14.6, 1.4), g(10.0, 6.0)], s);
+    p.add(Shape::convex_polygon(vec![g(9.4, 4.8), g(11.2, 6.6), g(8.8, 9.0), g(7.0, 7.2)], color, Stroke::NONE));
+    p.add(Shape::convex_polygon(vec![g(6.6, 7.4), g(8.6, 9.4), g(7.6, 12.2), g(5.0, 14.0), g(1.2, 14.8), g(2.0, 11.0), g(3.8, 8.4)], color, Stroke::NONE));
 }
 
 /// Warning triangle.
