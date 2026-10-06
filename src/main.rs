@@ -25,10 +25,21 @@ use polyloupe_core::{loader, scene};
 
 use eframe::{egui, egui_wgpu};
 
+/// When the process started, for the startup timings in the log (`RUST_LOG=polyloupe=info`).
+pub static LAUNCHED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Logs how long after launch a startup step finished.
+pub fn startup_mark(step: &str) {
+    if let Some(t) = LAUNCHED.get() {
+        log::info!("startup: {step} at {} ms", t.elapsed().as_millis());
+    }
+}
+
 fn main() -> eframe::Result {
     // The "opened in" time of a file opened at launch counts from here.
     let launched = std::time::Instant::now();
-    env_logger::init();
+    let _ = LAUNCHED.set(launched);
+    env_logger::Builder::from_default_env().format_timestamp_millis().init();
     polyloupe_core::i18n::set_translator(|en| i18n::tr(en).to_string());
 
     // The Explorer thumbnail, rendered headless (no window, no saved state), to check what
@@ -112,41 +123,14 @@ fn main() -> eframe::Result {
     )
 }
 
-/// Vulkan and DX12 only (GL costs startup time, and on Windows DX12 already falls back to its WARP
-/// software renderer on GPUs without drivers), and the adapter
-/// picked from the list egui-wgpu already made: its default path lets wgpu enumerate every GPU a
-/// second time, which on a hybrid laptop wakes both GPUs again (~0.25 s each round).
+/// GPU setup. Vulkan first, on its own: creating the instance and device ourselves keeps wgpu
+/// from also enumerating DX12 adapters (it creates a D3D12 device per GPU, ~200 ms at every
+/// launch on a hybrid laptop), and Vulkan builds our pipelines faster than DX12's shader
+/// compiler. Machines without a usable Vulkan driver get DX12 (whose WARP software renderer also
+/// covers GPUs without drivers). `WGPU_BACKEND` still picks the backend by hand.
 fn wgpu_setup() -> egui_wgpu::WgpuSetup {
-    use egui_wgpu::wgpu::{self, Backend, DeviceType, PowerPreference};
+    use egui_wgpu::wgpu;
     let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
-    if wgpu::Backends::from_env().is_none() {
-        setup.instance_descriptor.backends = wgpu::Backends::PRIMARY;
-    }
-    setup.native_adapter_selector = Some(std::sync::Arc::new(|adapters, surface| {
-        let low_power = PowerPreference::from_env() == Some(PowerPreference::LowPower);
-        let rank = |a: &wgpu::Adapter| {
-            let info = a.get_info();
-            let device = match info.device_type {
-                DeviceType::DiscreteGpu => if low_power { 2 } else { 3 },
-                DeviceType::IntegratedGpu => if low_power { 3 } else { 2 },
-                DeviceType::VirtualGpu => 1,
-                _ => 0,
-            };
-            // Vulkan builds our pipelines much faster than DX12's shader compiler.
-            let backend = match info.backend {
-                Backend::Vulkan => 2,
-                Backend::Dx12 => 1,
-                _ => 0,
-            };
-            (device, backend)
-        };
-        adapters
-            .iter()
-            .filter(|a| surface.is_none_or(|s| a.is_surface_supported(s)))
-            .max_by_key(|a| rank(a))
-            .cloned()
-            .ok_or_else(|| "no GPU adapter can draw to this window".to_string())
-    }));
     // wgpu's default 256 MB buffer cap rejects big scans and CAD exports (a 5.6M triangle STL
     // needs ~270 MB per attribute buffer): allow whatever the GPU supports.
     let default_descriptor = setup.device_descriptor.clone();
@@ -155,7 +139,55 @@ fn wgpu_setup() -> egui_wgpu::WgpuSetup {
         desc.required_limits.max_buffer_size = adapter.limits().max_buffer_size;
         desc
     });
+    setup.native_adapter_selector = Some(std::sync::Arc::new(|adapters, surface| {
+        adapters
+            .iter()
+            .filter(|a| surface.is_none_or(|s| a.is_surface_supported(s)))
+            .max_by_key(|a| adapter_rank(a))
+            .cloned()
+            .ok_or_else(|| "no GPU adapter can draw to this window".to_string())
+    }));
+    if wgpu::Backends::from_env().is_some() {
+        return egui_wgpu::WgpuSetup::CreateNew(setup);
+    }
+
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::VULKAN,
+        flags: setup.instance_descriptor.flags,
+        backend_options: setup.instance_descriptor.backend_options.clone(),
+        memory_budget_thresholds: setup.instance_descriptor.memory_budget_thresholds,
+        display: None,
+    });
+    let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::VULKAN));
+    if let Some(adapter) = adapters.iter().max_by_key(|a| adapter_rank(a)).cloned() {
+        match pollster::block_on(adapter.request_device(&(setup.device_descriptor)(&adapter))) {
+            Ok((device, queue)) => {
+                return egui_wgpu::WgpuSetup::Existing(egui_wgpu::WgpuSetupExisting { instance, adapter, device, queue });
+            }
+            Err(e) => log::warn!("Vulkan device failed ({e}), trying DX12"),
+        }
+    }
+    setup.instance_descriptor.backends = wgpu::Backends::DX12;
     egui_wgpu::WgpuSetup::CreateNew(setup)
+}
+
+/// Discrete GPU first (integrated with `WGPU_POWER_PREF=low`), then Vulkan over DX12.
+fn adapter_rank(a: &egui_wgpu::wgpu::Adapter) -> (u8, u8) {
+    use egui_wgpu::wgpu::{Backend, DeviceType, PowerPreference};
+    let low_power = PowerPreference::from_env() == Some(PowerPreference::LowPower);
+    let info = a.get_info();
+    let device = match info.device_type {
+        DeviceType::DiscreteGpu => if low_power { 2 } else { 3 },
+        DeviceType::IntegratedGpu => if low_power { 3 } else { 2 },
+        DeviceType::VirtualGpu => 1,
+        _ => 0,
+    };
+    let backend = match info.backend {
+        Backend::Vulkan => 2,
+        Backend::Dx12 => 1,
+        _ => 0,
+    };
+    (device, backend)
 }
 
 /// Settings saved before the app was renamed live under an old app id ("Poly Loupe", before that

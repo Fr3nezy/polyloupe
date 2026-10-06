@@ -515,7 +515,9 @@ impl Renderer {
             compare: Some(wgpu::CompareFunction::LessEqual),
             ..Default::default()
         });
+        let t = std::time::Instant::now();
         let shadows = create_shadows(device, &shadow_tex, &object_bgl);
+        log::info!("shadow pipeline created in {:?}", t.elapsed());
 
         let ibl = ibl::Ibl::new(device, queue);
         let globals_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -545,7 +547,9 @@ impl Renderer {
         let joints_buf = create_joints_buffer(device, 1);
         let (object_buf, object_bg) = create_object_buffer(device, &object_bgl, 1, object_stride, &joints_buf);
 
+        let t = std::time::Instant::now();
         let pipes = create_pipelines(device, &globals_bgl, &object_bgl, &material_bgl, &outline_bgl);
+        log::info!("pipelines created in {:?}", t.elapsed());
         let white = upload_image(device, queue, 1, 1, &[vec![255, 255, 255, 255]]);
         let flat_normal = upload_image(device, queue, 1, 1, &[vec![128, 128, 255, 255]]);
         let selection_buf = create_selection_buffer(device, 1);

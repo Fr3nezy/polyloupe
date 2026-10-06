@@ -221,7 +221,10 @@ impl Preload {
         let repaint = Arc::new(OnceLock::<egui::Context>::new());
         let (thread_path, thread_repaint) = (path.clone(), repaint.clone());
         std::thread::spawn(move || {
-            let _ = tx.send(loader::load(&thread_path));
+            let t = Instant::now();
+            let result = loader::load(&thread_path);
+            log::info!("startup: model read in {} ms", t.elapsed().as_millis());
+            let _ = tx.send(result);
             if let Some(ctx) = thread_repaint.get() {
                 ctx.request_repaint();
             }
@@ -344,7 +347,9 @@ struct CaptureState {
 
 impl ViewerApp {
     pub fn new(cc: &eframe::CreationContext<'_>, launch: LaunchOptions, preload: Option<Preload>) -> Self {
+        crate::startup_mark("window and GPU ready");
         theme::apply(&cc.egui_ctx);
+        crate::startup_mark("theme and fonts");
         let mut settings: Settings = cc
             .storage
             .and_then(|s| eframe::get_value(s, eframe::APP_KEY))
@@ -357,7 +362,9 @@ impl ViewerApp {
         let renderer = cc.wgpu_render_state.as_ref().map(|rs| {
             let info = rs.adapter.get_info();
             log::info!("GPU: {} ({:?}, {:?})", info.name, info.backend, info.device_type);
-            Renderer::new(&rs.device, &rs.queue)
+            let r = Renderer::new(&rs.device, &rs.queue);
+            crate::startup_mark("renderer");
+            r
         });
         let mut app = Self {
             settings,
