@@ -26,9 +26,10 @@ this repository by `scripts/build-installer.ps1`, and its SHA-256 is listed in t
 - Opens glTF/GLB, FBX, OBJ (with MTL textures), STL, PLY, 3MF, COLLADA (.dae) and STEP
   (.step/.stp); files load on a background thread.
   glTF support covers metallic-roughness PBR, skinning, morph targets, animation,
-  `KHR_texture_transform` and `EXT_texture_webp`; other extensions are ignored, and a file that
-  requires one (Draco, meshopt, ...) still opens with a warning, though it may look wrong or be
-  incomplete. All 150 Khronos glTF Sample Assets open.
+  `KHR_texture_transform`, `EXT_texture_webp`, meshopt compression (`EXT_meshopt_compression`,
+  used by Tripo and gltfpack exports) and `KHR_mesh_quantization`; other extensions are ignored,
+  and a file that requires one (Draco, ...) still opens with a warning, though it may look wrong
+  or be incomplete. All 150 Khronos glTF Sample Assets open.
   STEP files go through [OpenCASCADE](https://dev.opencascade.org/) with assembly parts, names and
   colors; the CAD kernel lives in its own DLL, loaded only when a STEP file is opened, and the
   meshed result is cached so the same file opens in a moment the next time.

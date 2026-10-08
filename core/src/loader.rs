@@ -321,7 +321,16 @@ fn open_gltf(path: &Path) -> Result<(gltf::Document, Option<Vec<u8>>, Vec<String
         Err(e) => return Err(invalid(&e)),
     };
     let mut warnings = Vec::new();
-    let supported_extra = ["KHR_materials_clearcoat", "KHR_materials_transmission", "KHR_materials_specular", "KHR_materials_ior", "KHR_materials_emissive_strength"];
+    let supported_extra = [
+        "KHR_materials_clearcoat",
+        "KHR_materials_transmission",
+        "KHR_materials_specular",
+        "KHR_materials_ior",
+        "KHR_materials_emissive_strength",
+        // Decoded by `read_buffers` and `read_attribute`.
+        "EXT_meshopt_compression",
+        "KHR_mesh_quantization",
+    ];
     unknown.retain(|u| !supported_extra.contains(&u.as_str()));
     if !unknown.is_empty() {
         warnings.push(trf(
@@ -330,6 +339,156 @@ fn open_gltf(path: &Path) -> Result<(gltf::Document, Option<Vec<u8>>, Vec<String
         ));
     }
     Ok((doc, blob, warnings, value))
+}
+
+/// The file's buffers, with `EXT_meshopt_compression` views decoded in place. A buffer that only
+/// stands in for compressed data (`fallback`, no data of its own) starts as zeros: the gltf crate
+/// would refuse the whole file for it ("missing binary portion").
+fn read_buffers(
+    doc: &gltf::Document,
+    base: &Path,
+    mut blob: Option<Vec<u8>>,
+    raw: &serde_json::Value,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<gltf::buffer::Data>, String> {
+    use base64::Engine;
+    let missing = |e: &dyn std::fmt::Display| format!("Couldn't read glTF buffers: {e}");
+    let mut buffers = Vec::new();
+    for buffer in doc.buffers() {
+        let fallback = raw
+            .pointer(&format!("/buffers/{}/extensions/EXT_meshopt_compression/fallback", buffer.index()))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let data = match buffer.source() {
+            gltf::buffer::Source::Bin => blob.take(),
+            gltf::buffer::Source::Uri(uri) => match uri.strip_prefix("data:") {
+                Some(rest) => {
+                    let payload = rest.split_once(',').map_or("", |(_, p)| p);
+                    base64::engine::general_purpose::STANDARD.decode(payload).ok()
+                }
+                None => std::fs::read(base.join(percent_decode(uri))).ok(),
+            },
+        };
+        let mut data = match data {
+            Some(d) => d,
+            None if fallback => Vec::new(),
+            None => return Err(missing(&format!("buffer {} not found", buffer.index()))),
+        };
+        if data.len() < buffer.length() {
+            if !fallback {
+                return Err(missing(&format!("buffer {} is shorter than declared", buffer.index())));
+            }
+            data.resize(buffer.length(), 0);
+        }
+        buffers.push(gltf::buffer::Data(data));
+    }
+
+    let views = raw.get("bufferViews").and_then(|v| v.as_array()).map(Vec::as_slice).unwrap_or_default();
+    let mut failed = 0;
+    for view in views {
+        let Some(ext) = view.pointer("/extensions/EXT_meshopt_compression") else { continue };
+        let int = |v: &serde_json::Value, key: &str| v.get(key).and_then(|x| x.as_u64()).map(|x| x as usize);
+        let text = |key: &str| ext.get(key).and_then(|x| x.as_str()).unwrap_or_default();
+        let decoded = (|| {
+            let (src_buffer, src_offset, src_len) = (int(ext, "buffer")?, int(ext, "byteOffset").unwrap_or(0), int(ext, "byteLength")?);
+            let (stride, count) = (int(ext, "byteStride")?, int(ext, "count")?);
+            let (dst_buffer, dst_offset) = (int(view, "buffer")?, int(view, "byteOffset").unwrap_or(0));
+            let src = buffers.get(src_buffer)?.0.get(src_offset..src_offset + src_len)?;
+            let out = decode_meshopt(src, text("mode"), text("filter"), stride, count)?;
+            Some((dst_buffer, dst_offset, out))
+        })();
+        match decoded {
+            Some((buffer, offset, out)) => match buffers.get_mut(buffer).and_then(|b| b.0.get_mut(offset..offset + out.len())) {
+                Some(dst) => dst.copy_from_slice(&out),
+                None => failed += 1,
+            },
+            None => failed += 1,
+        }
+    }
+    if failed > 0 {
+        warnings.push(trf("{count} compressed meshopt buffers couldn't be decoded", &[("count", &failed)]));
+    }
+    Ok(buffers)
+}
+
+/// One `EXT_meshopt_compression` buffer view, decoded with meshoptimizer.
+fn decode_meshopt(src: &[u8], mode: &str, filter: &str, stride: usize, count: usize) -> Option<Vec<u8>> {
+    use meshopt::ffi;
+    let mut out = vec![0u8; stride.checked_mul(count)?];
+    let dst = out.as_mut_ptr().cast();
+    // SAFETY: `out` holds exactly `count * stride` bytes, which is what every decoder writes;
+    // the decoders validate `src` against its length and return nonzero on bad input.
+    let status = unsafe {
+        match mode {
+            "ATTRIBUTES" => ffi::meshopt_decodeVertexBuffer(dst, count, stride, src.as_ptr(), src.len()),
+            "TRIANGLES" => ffi::meshopt_decodeIndexBuffer(dst, count, stride, src.as_ptr(), src.len()),
+            "INDICES" => ffi::meshopt_decodeIndexSequence(dst, count, stride, src.as_ptr(), src.len()),
+            _ => return None,
+        }
+    };
+    if status != 0 {
+        return None;
+    }
+    // SAFETY: filters work in place on the `count * stride` bytes just decoded.
+    unsafe {
+        match filter {
+            "OCTAHEDRAL" if stride == 4 || stride == 8 => ffi::meshopt_decodeFilterOct(dst, count, stride),
+            "QUATERNION" if stride == 8 => ffi::meshopt_decodeFilterQuat(dst, count, stride),
+            "EXPONENTIAL" if stride % 4 == 0 => ffi::meshopt_decodeFilterExp(dst, count, stride),
+            "COLOR" if stride == 4 || stride == 8 => ffi::meshopt_decodeFilterColor(dst, count, stride),
+            "" | "NONE" => {}
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
+/// A vertex attribute stored as integers (`KHR_mesh_quantization`), as floats: normalized
+/// components map to -1..1 or 0..1, the others keep their value (the node's scale undoes them).
+/// Sparse accessors aren't covered.
+fn read_attribute<const N: usize>(accessor: &gltf::Accessor, buffers: &[gltf::buffer::Data]) -> Option<Vec<[f32; N]>> {
+    use gltf::accessor::DataType;
+    if accessor.sparse().is_some() || accessor.dimensions().multiplicity() < N {
+        return None;
+    }
+    let view = accessor.view()?;
+    let data = &buffers.get(view.buffer().index())?.0;
+    let size = accessor.data_type().size();
+    let stride = view.stride().unwrap_or(size * accessor.dimensions().multiplicity());
+    let start = view.offset() + accessor.offset();
+    let normalized = accessor.normalized();
+    let component = |at: usize| -> Option<f32> {
+        let b = data.get(at..at + size)?;
+        Some(match accessor.data_type() {
+            DataType::I8 => {
+                let v = b[0] as i8 as f32;
+                if normalized { (v / 127.0).max(-1.0) } else { v }
+            }
+            DataType::U8 => {
+                let v = b[0] as f32;
+                if normalized { v / 255.0 } else { v }
+            }
+            DataType::I16 => {
+                let v = i16::from_le_bytes([b[0], b[1]]) as f32;
+                if normalized { (v / 32767.0).max(-1.0) } else { v }
+            }
+            DataType::U16 => {
+                let v = u16::from_le_bytes([b[0], b[1]]) as f32;
+                if normalized { v / 65535.0 } else { v }
+            }
+            DataType::U32 => u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f32,
+            DataType::F32 => f32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+        })
+    };
+    (0..accessor.count())
+        .map(|i| {
+            let mut v = [0.0; N];
+            for (k, c) in v.iter_mut().enumerate() {
+                *c = component(start + i * stride + k * size)?;
+            }
+            Some(v)
+        })
+        .collect()
 }
 
 /// Indices of a triangle strip or fan as a plain triangle list, keeping the winding of every
@@ -356,8 +515,7 @@ fn load_gltf(path: &Path, texture_dirs: &[PathBuf]) -> Result<Scene, String> {
     let (doc, blob, mut warnings, raw_json) = open_gltf(path)?;
     let doc = &doc;
     let base = path.parent().unwrap_or(Path::new("."));
-    let buffers = gltf::import_buffers(doc, Some(base), blob)
-        .map_err(|e| format!("Couldn't read glTF buffers: {e}"))?;
+    let buffers = read_buffers(doc, base, blob, &raw_json, &mut warnings)?;
 
     let jobs: Vec<ImageJob> = doc
         .images()
@@ -535,8 +693,19 @@ fn load_gltf(path: &Path, texture_dirs: &[PathBuf]) -> Result<Scene, String> {
                 continue;
             }
             let reader = prim.reader(|b| buffers.get(b.index()).map(|d| &d.0[..]));
-            let Some(positions) = reader.read_positions() else { continue };
-            let positions: Vec<[f32; 3]> = positions.collect();
+            // Quantized attributes (KHR_mesh_quantization) are read here; the gltf crate only
+            // reads the float ones.
+            let quantized = |semantic: gltf::Semantic| prim.get(&semantic).filter(|a| a.data_type() != gltf::accessor::DataType::F32);
+            let positions: Vec<[f32; 3]> = match quantized(gltf::Semantic::Positions) {
+                Some(a) => match read_attribute::<3>(&a, &buffers) {
+                    Some(p) => p,
+                    None => continue,
+                },
+                None => match reader.read_positions() {
+                    Some(p) => p.collect(),
+                    None => continue,
+                },
+            };
             let count = positions.len();
             let indices: Vec<u32> = match reader.read_indices() {
                 Some(i) => i.into_u32().collect(),
@@ -566,15 +735,25 @@ fn load_gltf(path: &Path, texture_dirs: &[PathBuf]) -> Result<Scene, String> {
             let data = MeshData {
                 name: if prim_count > 1 { format!("{base_name}.{pi:03}") } else { base_name.clone() },
                 positions,
-                normals: reader.read_normals().map(|n| n.collect()),
-                uvs: reader.read_tex_coords(0).map(|t| {
-                    let uvs = t.into_f32();
-                    match uv_transform(&prim.material()) {
-                        Some(transform) => uvs.map(|uv| transform(uv)).collect(),
-                        None => uvs.collect(),
+                normals: match quantized(gltf::Semantic::Normals) {
+                    Some(a) => read_attribute::<3>(&a, &buffers)
+                        .map(|n| n.into_iter().map(|v| Vec3::from(v).normalize_or_zero().to_array()).collect()),
+                    None => reader.read_normals().map(|n| n.collect()),
+                },
+                uvs: {
+                    let uvs: Option<Vec<[f32; 2]>> = match quantized(gltf::Semantic::TexCoords(0)) {
+                        Some(a) => read_attribute::<2>(&a, &buffers),
+                        None => reader.read_tex_coords(0).map(|t| t.into_f32().collect()),
+                    };
+                    match (uvs, uv_transform(&prim.material())) {
+                        (Some(uvs), Some(transform)) => Some(uvs.into_iter().map(|uv| transform(uv)).collect()),
+                        (uvs, _) => uvs,
                     }
-                }),
-                tangents: reader.read_tangents().map(|t| t.collect()),
+                },
+                tangents: match quantized(gltf::Semantic::Tangents) {
+                    Some(a) => read_attribute::<4>(&a, &buffers),
+                    None => reader.read_tangents().map(|t| t.collect()),
+                },
                 colors: reader.read_colors(0).map(|c| c.into_rgba_f32().collect()),
                 indices,
                 // glTF: skinned vertices end up in world space through the joints alone.
@@ -1214,6 +1393,34 @@ pub fn load_environment(path: &Path) -> Result<EnvImage, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meshopt_views_decode() {
+        // Vertices: 12-byte positions, the layout Tripo exports use (before their exp filter).
+        let vertices: Vec<[f32; 3]> = (0..50).map(|i| [i as f32, (i * 2) as f32, -(i as f32)]).collect();
+        let encoded = meshopt::encode_vertex_buffer(&vertices).unwrap();
+        let out = decode_meshopt(&encoded, "ATTRIBUTES", "", 12, vertices.len()).unwrap();
+        assert_eq!(out, bytemuck_bytes(&vertices));
+
+        let indices: Vec<u32> = (0..48).map(|i| (i * 7 % 50) as u32).collect();
+        let encoded = meshopt::encode_index_buffer(&indices, 50).unwrap();
+        let out = decode_meshopt(&encoded, "TRIANGLES", "", 4, indices.len()).unwrap();
+        let decoded: Vec<u32> = out.chunks_exact(4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+        // The codec may rotate a triangle's corners; the winding stays.
+        let canon = |t: &[u32]| {
+            let k = (0..3).min_by_key(|&k| t[k]).unwrap();
+            [t[k], t[(k + 1) % 3], t[(k + 2) % 3]]
+        };
+        let tris = |v: &[u32]| v.chunks_exact(3).map(canon).collect::<Vec<_>>();
+        assert_eq!(tris(&decoded), tris(&indices));
+
+        assert!(decode_meshopt(&[1, 2, 3], "ATTRIBUTES", "", 12, 10).is_none());
+        assert!(decode_meshopt(&encoded, "SOMETHING", "", 4, indices.len()).is_none());
+    }
+
+    fn bytemuck_bytes(v: &[[f32; 3]]) -> Vec<u8> {
+        v.iter().flatten().flat_map(|f| f.to_le_bytes()).collect()
+    }
 
     #[test]
     fn pointer_animations_and_extension_only_textures_load() {
