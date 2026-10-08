@@ -556,7 +556,16 @@ impl ViewerApp {
     }
 
     pub(super) fn export_resolution_px(&self) -> [u32; 2] {
-        self.settings.render_resolution.dimensions(self.viewport_px, self.settings.render_custom_w, self.settings.render_custom_h)
+        self.settings.render_resolution.dimensions(self.export_view_px(), self.settings.render_custom_w, self.settings.render_custom_h)
+    }
+
+    /// The whole view an export shows, in pixels: both halves of a side-by-side comparison.
+    pub(super) fn export_view_px(&self) -> [u32; 2] {
+        let [w, h] = self.viewport_px;
+        match &self.compare {
+            Some(c) if c.mode == compare::CompareMode::SideBySide => [w * 2, h],
+            _ => [w, h],
+        }
     }
 
     /// Saves the current view as a PNG, with supersampling (SSAA) and chosen resolution.
@@ -593,13 +602,10 @@ impl ViewerApp {
     }
 
     /// Renders the current view off screen, as an exported image looks: overlays per the
-    /// overlay switch, grid only if the export asks for it, no selection highlight.
+    /// overlay switch, grid only if the export asks for it, no selection highlight. With a
+    /// comparison open the image holds both models, as the viewport shows them: side by side,
+    /// or A and B across the Split divider with its gradient.
     fn render_offscreen(&mut self, size: [u32; 2], transparent: bool) -> Option<([u32; 2], Vec<u8>)> {
-        let section = self.section_plane();
-        let normal_length = self.normal_length();
-        let print_scale = self.print_scale();
-        let scene = self.scene_frame();
-        let renderer = self.renderer.as_mut()?;
         let mut settings = self.settings.clone();
         settings.show_grid = settings.show_overlays && settings.export_grid;
         settings.show_wire_overlay &= settings.show_overlays;
@@ -614,9 +620,68 @@ impl ViewerApp {
             settings.studio_backdrop = false;
             settings.transparent_background = false;
         }
+        let Some(c) = &self.compare else {
+            return self.render_view_offscreen(false, size, &settings, transparent);
+        };
+        let (mode, split, gradient) = (c.mode, c.split, c.gradient);
+        let settings_b = c.settings_b(&settings);
+        let [w, h] = size;
+        match mode {
+            compare::CompareMode::SideBySide => {
+                let wa = (w / 2).max(1);
+                let wb = w.saturating_sub(wa).max(1);
+                let (_, a) = self.render_view_offscreen(false, [wa, h], &settings, transparent)?;
+                let (_, b) = self.render_view_offscreen(true, [wb, h], &settings_b, transparent)?;
+                let mut out = Vec::with_capacity(((wa + wb) * h * 4) as usize);
+                for y in 0..h as usize {
+                    out.extend_from_slice(&a[y * wa as usize * 4..(y + 1) * wa as usize * 4]);
+                    out.extend_from_slice(&b[y * wb as usize * 4..(y + 1) * wb as usize * 4]);
+                }
+                Some(([wa + wb, h], out))
+            }
+            compare::CompareMode::Split => {
+                let (_, mut a) = self.render_view_offscreen(false, size, &settings, transparent)?;
+                let (_, b) = self.render_view_offscreen(true, size, &settings_b, transparent)?;
+                // B's share per column, the same ramp the viewport draws across the divider.
+                let (t_min, t_max) = if gradient <= 0.001 {
+                    (split, split)
+                } else {
+                    let g = gradient.clamp(0.005, 0.45);
+                    ((split - g).clamp(0.0, 1.0), (split + g).clamp(0.0, 1.0))
+                };
+                let weights: Vec<u16> = (0..w)
+                    .map(|x| {
+                        let t = (x as f32 + 0.5) / w as f32;
+                        let k = if t_max > t_min { ((t - t_min) / (t_max - t_min)).clamp(0.0, 1.0) } else { (t >= split) as u8 as f32 };
+                        (k * 256.0).round() as u16
+                    })
+                    .collect();
+                for (row_a, row_b) in a.chunks_exact_mut(w as usize * 4).zip(b.chunks_exact(w as usize * 4)) {
+                    for (x, (pa, pb)) in row_a.chunks_exact_mut(4).zip(row_b.chunks_exact(4)).enumerate() {
+                        let k = weights[x];
+                        for ch in 0..4 {
+                            pa[ch] = ((pa[ch] as u16 * (256 - k) + pb[ch] as u16 * k + 128) >> 8) as u8;
+                        }
+                    }
+                }
+                Some((size, a))
+            }
+        }
+    }
+
+    /// One off-screen frame of model A, or of the comparison's model B, from the shared camera.
+    fn render_view_offscreen(&mut self, model_b: bool, size: [u32; 2], settings: &Settings, transparent: bool) -> Option<([u32; 2], Vec<u8>)> {
+        let section = self.section_plane();
+        let normal_length = self.normal_length();
+        let print_scale = self.print_scale();
+        // B is drawn without a scene frame, as in the viewport (its shadows fit model A).
+        let scene = if model_b { None } else { self.scene_frame() };
+        let renderer = if model_b { &mut self.compare.as_mut()?.renderer } else { self.renderer.as_mut()? };
         let (grid_cell, grid_fade, grid_axis) = grid_params(&self.camera);
         // Hide the selection; the next viewport frame sets it again.
-        renderer.set_selection(&vec![0; self.selection.selected.len()]);
+        if !model_b {
+            renderer.set_selection(&vec![0; self.selection.selected.len()]);
+        }
         let input = FrameInput {
             view: self.camera.view_matrix(),
             proj: self.camera.projection(size[0] as f32 / size[1] as f32),
@@ -626,7 +691,7 @@ impl ViewerApp {
             grid_cell,
             grid_fade,
             grid_axis,
-            settings: &settings,
+            settings,
             pick: None,
             transparent,
             section,

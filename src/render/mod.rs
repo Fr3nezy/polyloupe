@@ -179,6 +179,46 @@ struct MaterialUniform {
 
 const OBJECT_SIZE: u64 = std::mem::size_of::<ObjectUniform>() as u64;
 
+/// Everything in a `FrameInput` that shows in the image, kept to tell an unchanged frame.
+#[derive(PartialEq)]
+struct FrameKey {
+    size: [u32; 2],
+    view: Mat4,
+    proj: Mat4,
+    eye: Vec3,
+    cam_back: Vec3,
+    ortho: bool,
+    grid: [f32; 2],
+    grid_axis: u32,
+    settings: Settings,
+    transparent: bool,
+    section: Option<[f32; 4]>,
+    normal_length: f32,
+    print_scale: f32,
+    scene: Option<[f32; 5]>,
+}
+
+impl FrameKey {
+    fn new(size: [u32; 2], input: &FrameInput) -> Self {
+        Self {
+            size,
+            view: input.view,
+            proj: input.proj,
+            eye: input.eye,
+            cam_back: input.cam_back,
+            ortho: input.ortho,
+            grid: [input.grid_cell, input.grid_fade],
+            grid_axis: input.grid_axis,
+            settings: input.settings.clone(),
+            transparent: input.transparent,
+            section: input.section,
+            normal_length: input.normal_length,
+            print_scale: input.print_scale,
+            scene: input.scene.map(|f| [f.center.x, f.center.y, f.center.z, f.radius, f.floor]),
+        }
+    }
+}
+
 pub struct FrameInput<'a> {
     pub view: Mat4,
     pub proj: Mat4,
@@ -316,6 +356,13 @@ pub struct Renderer {
     user_transforms: Vec<Mat4>,
     objects_key: Option<(ColorMode, [u8; 3], Option<[u8; 3]>)>,
     objects_dirty: bool,
+    /// Something the image depends on changed outside `render` (scene, pose, environment,
+    /// selection...). Together with `last_frame` it lets an unchanged viewport skip the GPU.
+    dirty: std::cell::Cell<bool>,
+    /// Inputs of the last viewport frame still held by the egui texture.
+    last_frame: Option<FrameKey>,
+    /// Light matrices the shadow maps were last drawn with; geometry changes clear it.
+    shadow_key: Option<[Mat4; 2]>,
     /// Result of the last pick request: `Some(None)` means "clicked empty space".
     pub picked: Option<Option<usize>>,
     /// World position under the last pick pixel, when it hit a surface.
@@ -457,7 +504,7 @@ impl Renderer {
         let matcap_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("matcap"),
             size: wgpu::Extent3d {
-                width: matcap::SIZE as u32,
+                width: matcap::SIZE as u32 * 2,
                 height: matcap::SIZE as u32,
                 depth_or_array_layers: 1,
             },
@@ -612,11 +659,15 @@ impl Renderer {
             user_transforms: Vec::new(),
             objects_key: None,
             objects_dirty: true,
+            dirty: std::cell::Cell::new(true),
+            last_frame: None,
+            shadow_key: None,
             picked: None,
         }
     }
 
     pub fn set_environment(&self, env: &EnvImage) {
+        self.dirty.set(true);
         self.ibl.set_environment(&self.device, &self.queue, env);
         self.key_light.set(brightest_direction(env));
     }
@@ -647,6 +698,8 @@ impl Renderer {
     }
 
     pub fn upload_scene(&mut self, scene: &Scene) {
+        self.dirty.set(true);
+        self.shadow_key = None;
         self.meshes.clear();
         self.objects.clear();
 
@@ -844,6 +897,8 @@ impl Renderer {
 
     /// Joint matrices for every skin (see `AnimPlayer::pose`).
     pub fn set_joints(&mut self, joints: &[Mat4]) {
+        self.dirty.set(true);
+        self.shadow_key = None;
         if joints.len() > self.joints_capacity {
             self.joints_capacity = joints.len().next_power_of_two();
             self.joints_buf = create_joints_buffer(&self.device, self.joints_capacity);
@@ -870,12 +925,15 @@ impl Renderer {
             if o.model != *t {
                 o.model = *t;
                 self.objects_dirty = true;
+                self.dirty.set(true);
             }
         }
     }
 
     /// New vertex positions/normals for a morphing mesh (same vertex count).
     pub fn update_mesh_geometry(&mut self, index: usize, positions: &[[f32; 3]], normals: &[[f32; 3]]) {
+        self.dirty.set(true);
+        self.shadow_key = None;
         if let Some(m) = self.meshes.get(index) {
             self.queue.write_buffer(&m.positions, 0, bytemuck::cast_slice(positions));
             self.queue.write_buffer(&m.normals, 0, bytemuck::cast_slice(normals));
@@ -884,6 +942,7 @@ impl Renderer {
 
     /// Uploads the mesh analysis markers; `per_mesh[i]` belongs to mesh `i`.
     pub fn set_markers(&mut self, per_mesh: &[Vec<MarkerInstance>]) {
+        self.dirty.set(true);
         for (mesh, instances) in self.meshes.iter_mut().zip(per_mesh) {
             mesh.markers = (!instances.is_empty()).then(|| {
                 let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -927,8 +986,12 @@ impl Renderer {
     }
 
     pub fn set_visibility(&mut self, visible: &[bool]) {
-        self.visible.clear();
-        self.visible.extend_from_slice(visible);
+        if visible != self.visible.as_slice() {
+            self.visible.clear();
+            self.visible.extend_from_slice(visible);
+            self.dirty.set(true);
+            self.shadow_key = None;
+        }
     }
 
     /// Per object: 0 = unselected, 1 = selected, 2 = active.
@@ -937,6 +1000,7 @@ impl Renderer {
         if states != self.selection {
             self.selection = states;
             self.objects_dirty = true;
+            self.dirty.set(true);
         }
     }
 
@@ -945,6 +1009,7 @@ impl Renderer {
         if transforms != self.user_transforms.as_slice() {
             self.user_transforms = transforms.to_vec();
             self.objects_dirty = true;
+            self.dirty.set(true);
         }
     }
 
@@ -953,6 +1018,7 @@ impl Renderer {
         if passes != self.pass_overrides.as_slice() {
             self.pass_overrides = passes.to_vec();
             self.objects_dirty = true;
+            self.dirty.set(true);
         }
     }
 
@@ -963,6 +1029,7 @@ impl Renderer {
         }
         self.objects_key = Some(key);
         self.objects_dirty = false;
+        self.shadow_key = None;
         let single = srgb_to_linear(settings.single_color);
         let plastic = srgb_to_linear(settings.plastic_color);
         let mut bytes = vec![0u8; self.objects.len() * self.object_stride as usize];
@@ -1127,6 +1194,22 @@ impl Renderer {
         input: &FrameInput,
     ) -> Option<egui::TextureId> {
         let size = [size[0].max(1), size[1].max(1)];
+        // An unchanged viewport (the UI repainting for a hover, a tooltip...) keeps last frame's
+        // image instead of drawing the whole scene again. Headless renders reuse the targets at
+        // another size, so they always draw and drop the cache.
+        let to_egui = egui_renderer.is_some();
+        let key = FrameKey::new(size, input);
+        if to_egui
+            && input.pick.is_none()
+            && !self.dirty.get()
+            && self.texture_id.is_some()
+            && !matches!(self.surface_maps, SurfaceMaps::Decoding(_))
+            && self.last_frame.as_ref() == Some(&key)
+        {
+            return self.texture_id;
+        }
+        self.dirty.set(false);
+        self.last_frame = to_egui.then_some(key);
         self.ensure_targets(size, egui_renderer);
         let s = input.settings;
 
@@ -1314,10 +1397,13 @@ impl Renderer {
             },
         };
         self.queue.write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
-        if shadow_frame.is_some() {
+        // Shadow maps only change with the lights or the geometry, not with the camera.
+        let draw_shadows = shadow_frame.is_some() && self.shadow_key != Some([light0, light1]);
+        if draw_shadows {
             for (buf, m) in self.shadows.matrices.iter().zip([light0, light1]) {
                 self.queue.write_buffer(buf, 0, bytemuck::bytes_of(&m.to_cols_array_2d()));
             }
+            self.shadow_key = Some([light0, light1]);
         }
 
         let mut encoder = self
@@ -1363,7 +1449,7 @@ impl Renderer {
             self.draw_positions_only(&mut pass, false);
         }
 
-        if shadow_frame.is_some() {
+        if draw_shadows {
             for layer in 0..2 {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("shadow map"),
@@ -1732,20 +1818,23 @@ fn upload_image(device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: 
     }
 }
 
+/// Diffuse in the texture's left half, specular in its right half.
 fn write_matcap(queue: &wgpu::Queue, tex: &wgpu::Texture, index: usize) {
-    let pixels = matcap::generate(index);
+    let m = matcap::generate(index);
     let size = matcap::SIZE as u32;
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: tex,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        &pixels,
-        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(size * 4), rows_per_image: Some(size) },
-        wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
-    );
+    for (half, pixels) in [m.diffuse, m.specular].iter().enumerate() {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: half as u32 * size, y: 0, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            pixels,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(size * 4), rows_per_image: Some(size) },
+            wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+        );
+    }
 }
 
 fn create_joints_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {

@@ -402,24 +402,20 @@ impl ViewerApp {
         let is_same = c.is_same_model;
         let top = viewport.top() + 12.0;
 
-        let (pos_a, pos_center, pos_b) = match mode {
-            super::compare::CompareMode::SideBySide => {
-                let mid = viewport.center().x;
-                (
-                    pos2((viewport.left() + mid) * 0.5, top),
-                    pos2(mid, top),
-                    pos2((mid + viewport.right()) * 0.5, top),
-                )
-            }
-            super::compare::CompareMode::Split => {
-                let center_x = viewport.center().x;
-                (
-                    pos2((viewport.left() + center_x) * 0.5, top),
-                    pos2(center_x, top),
-                    pos2((center_x + viewport.right()) * 0.5, top),
-                )
-            }
+        // A over the left half, B over the right one, the mode bar in the middle. Each side bar
+        // is pushed in from the viewport edge and out from the middle bar (last frame's widths),
+        // so the three never overlap however narrow the view gets.
+        let width = |id: &str| ctx.memory(|m| m.area_rect(Id::new(id))).map_or(0.0, |r| r.width());
+        let (w_a, w_center, w_b) = (width("compare_bar_a"), width("compare_bar_center"), width("compare_bar_b"));
+        let gap = 8.0;
+        let mid = viewport.center().x;
+        let place = |w: f32, wanted: f32, lo: f32, hi: f32| {
+            let half = w * 0.5;
+            if hi - lo < w { (lo + hi) * 0.5 } else { wanted.clamp(lo + half, hi - half) }
         };
+        let x_a = place(w_a, (viewport.left() + mid) * 0.5, viewport.left() + gap, mid - w_center * 0.5 - gap);
+        let x_b = place(w_b, (mid + viewport.right()) * 0.5, mid + w_center * 0.5 + gap, viewport.right() - gap);
+        let (pos_a, pos_center, pos_b) = (pos2(x_a, top), pos2(mid, top), pos2(x_b, top));
 
         // 1. Toolbar A (Window A)
         let s = &mut self.settings;
@@ -479,11 +475,10 @@ impl ViewerApp {
 
                     if mode == super::compare::CompareMode::Split {
                         toolbar_separator(ui);
-                        ui.add(
-                            egui::Slider::new(&mut c.gradient, 0.0..=0.35)
-                                .show_value(false)
-                                .text(tr("Gradient")),
-                        );
+                        ui.label(theme::caps(tr("Gradient"), 10.0, theme::TEXT_DIM));
+                        ui.spacing_mut().slider_width = 90.0;
+                        ui.add(egui::Slider::new(&mut c.gradient, 0.0..=0.35).show_value(false))
+                            .on_hover_text(tr("Gradient"));
                     }
 
                     toolbar_separator(ui);
@@ -1059,7 +1054,8 @@ impl ViewerApp {
 
     /// Viewport light locators / gizmos in photo mode style: visible position, color, draggable in 3D view.
     pub(super) fn draw_lights_overlay(&mut self, ui: &mut Ui, viewport: Rect) {
-        if self.settings.shading != ShadingMode::Rendered {
+        // The overlays switch hides them too, even while the Render tab is open.
+        if self.settings.shading != ShadingMode::Rendered || !self.settings.show_overlays {
             return;
         }
         let in_render_tab = self.settings.show_sidebar && self.inspector_tab == InspectorTab::Render;
@@ -1084,8 +1080,8 @@ impl ViewerApp {
         let painter = ui.painter().with_clip_rect(viewport);
         let center_pt = project(center);
 
-        let mut drag_delta = None;
-        let mut dragged_idx = None;
+        let orbit = radius * 1.5;
+        let mut drag = None;
 
         for (i, light) in self.settings.lights.iter().enumerate() {
             if !light.enabled {
@@ -1099,13 +1095,15 @@ impl ViewerApp {
                 let elevation = d.z.clamp(-1.0, 1.0).asin().max(25f32.to_radians());
                 (flat * elevation.cos() + Vec3::Z * elevation.sin()).normalize()
             } else {
+                // Same range the renderer lights with: the key light never goes below 5°.
+                let (lo, hi) = light_pitch_range(i);
                 let yaw_rad = light.yaw.to_radians();
-                let pitch_rad = light.pitch.to_radians().clamp(-89f32.to_radians(), 89f32.to_radians());
+                let pitch_rad = light.pitch.clamp(lo, hi).to_radians();
                 let (sy, cy) = yaw_rad.sin_cos();
                 let (sp, cp) = pitch_rad.sin_cos();
                 Vec3::new(cp * cy, cp * sy, sp).normalize()
             };
-            let world_pos = center + dir * (radius * 1.5);
+            let world_pos = center + dir * orbit;
             let Some(screen_pos) = project(world_pos) else { continue };
 
             // Ray pointing towards center
@@ -1119,12 +1117,11 @@ impl ViewerApp {
             let handle_rect = Rect::from_center_size(screen_pos, Vec2::splat(26.0));
             let r = ui.interact(handle_rect, handle_id, Sense::drag());
             if r.hovered() || r.dragged() {
-                ui.ctx().set_cursor_icon(CursorIcon::Grab);
+                ui.ctx().set_cursor_icon(if r.dragged() { CursorIcon::Grabbing } else { CursorIcon::Grab });
             }
-            if r.dragged() {
+            if r.dragged() && r.drag_delta() != Vec2::ZERO {
                 ui.ctx().request_repaint();
-                drag_delta = Some(r.drag_delta());
-                dragged_idx = Some(i);
+                drag = Some((i, screen_pos + r.drag_delta(), world_pos));
             }
 
             let light_color = Color32::from_rgb(light.color[0], light.color[1], light.color[2]);
@@ -1142,20 +1139,42 @@ impl ViewerApp {
             painter.galley(chip.min + vec2(4.0, 2.0), galley, theme::TEXT);
         }
 
-        // Apply drag updates to light spherical coordinates
-        if let (Some(delta), Some(idx)) = (drag_delta, dragged_idx) {
-            if let Some(light) = self.settings.lights.get_mut(idx) {
-                if light.follow_env {
-                    let d = self.renderer.as_ref().map(|r| r.key_light()).unwrap_or(Vec3::new(0.5, 0.5, 0.7));
-                    let (sin, cos) = self.settings.env_rotation.to_radians().sin_cos();
-                    let d = Vec3::new(cos * d.x - sin * d.y, sin * d.x + cos * d.y, d.z);
-                    light.yaw = d.y.atan2(d.x).to_degrees().rem_euclid(360.0);
-                    light.pitch = d.z.clamp(-1.0, 1.0).asin().to_degrees();
-                    light.follow_env = false;
-                }
-                light.yaw = (light.yaw + delta.x * 0.7).rem_euclid(360.0);
-                light.pitch = (light.pitch - delta.y * 0.5).clamp(-85.0, 85.0);
-            }
+        // The handle follows the cursor on the sphere the lights sit on: cast the pointer's ray,
+        // take the hit nearest to where the light was (so it stays on the side it's on), or the
+        // sphere's rim when the ray misses it. Screen motion maps to the same visual motion from
+        // any camera angle.
+        let Some((idx, target, previous)) = drag else { return };
+        let inv = view_proj.inverse();
+        let ndc = vec2(
+            (target.x - viewport.left()) / viewport.width() * 2.0 - 1.0,
+            1.0 - (target.y - viewport.top()) / viewport.height() * 2.0,
+        );
+        // Reverse-Z: depth 1 is the near plane.
+        let near = inv.project_point3(Vec3::new(ndc.x, ndc.y, 1.0));
+        let far = inv.project_point3(Vec3::new(ndc.x, ndc.y, 0.5));
+        let ray = (far - near).normalize_or_zero();
+        if ray == Vec3::ZERO {
+            return;
+        }
+        let oc = near - center;
+        let b = oc.dot(ray);
+        let disc = b * b - (oc.length_squared() - orbit * orbit);
+        let hit = if disc >= 0.0 {
+            let root = disc.sqrt();
+            let (p1, p2) = (near + ray * (-b - root), near + ray * (-b + root));
+            if p1.distance_squared(previous) <= p2.distance_squared(previous) { p1 } else { p2 }
+        } else {
+            near + ray * -b
+        };
+        let d = (hit - center).normalize_or_zero();
+        if d == Vec3::ZERO {
+            return;
+        }
+        if let Some(light) = self.settings.lights.get_mut(idx) {
+            let (lo, hi) = light_pitch_range(idx);
+            light.follow_env = false;
+            light.yaw = d.y.atan2(d.x).to_degrees().rem_euclid(360.0);
+            light.pitch = d.z.clamp(-1.0, 1.0).asin().to_degrees().clamp(lo, hi);
         }
     }
 
@@ -1451,6 +1470,7 @@ impl ViewerApp {
         let mut do_export_turntable = false;
         let mut do_split_shading = false;
         let busy = self.turntable_job.is_some();
+        let view_px = self.export_view_px();
 
         {
             let s = &mut self.settings;
@@ -1486,7 +1506,7 @@ impl ViewerApp {
                 });
             }
 
-            let [eff_w, eff_h] = s.render_resolution.dimensions(self.viewport_px, s.render_custom_w, s.render_custom_h);
+            let [eff_w, eff_h] = s.render_resolution.dimensions(view_px, s.render_custom_w, s.render_custom_h);
             ui.label(
                 RichText::new(trf("Output: {w} × {h} px", &[("w", &eff_w), ("h", &eff_h)]))
                     .size(11.0)
@@ -2483,4 +2503,10 @@ pub(super) fn drop_overlay(ui: &Ui, viewport: Rect, has_model: bool) {
         painter.text(zone.center() - vec2(0.0, 12.0), Align2::CENTER_CENTER, tr(title), theme::bold(22.0), theme::TEXT);
         painter.text(zone.center() + vec2(0.0, 16.0), Align2::CENTER_CENTER, tr(sub), FontId::proportional(13.0), theme::TEXT_DIM);
     }
+}
+
+/// Elevation range a light can take, in degrees: the key light (the shadow caster) stays above
+/// the horizon, the others may light from below like the Render tab's slider allows.
+pub(super) fn light_pitch_range(index: usize) -> (f32, f32) {
+    if index == 0 { (5.0, 85.0) } else { (-60.0, 85.0) }
 }

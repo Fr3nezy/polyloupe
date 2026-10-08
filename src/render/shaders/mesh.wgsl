@@ -250,9 +250,12 @@ fn studio(n_view: vec3<f32>, base: vec3<f32>) -> vec3<f32> {
     return base * (ambient + diffuse) + vec3<f32>(spec);
 }
 
+// Like Blender: diffuse (left half of the texture) times the color, plus specular (right half).
 fn matcap(n_view: vec3<f32>, base: vec3<f32>) -> vec3<f32> {
     let uv = vec2<f32>(n_view.x, -n_view.y) * 0.495 + vec2<f32>(0.5);
-    return textureSampleLevel(matcap_tex, clamp_samp, uv, 0.0).rgb * base;
+    let diffuse = textureSampleLevel(matcap_tex, clamp_samp, vec2<f32>(uv.x * 0.5, uv.y), 0.0).rgb;
+    let specular = textureSampleLevel(matcap_tex, clamp_samp, vec2<f32>(uv.x * 0.5 + 0.5, uv.y), 0.0).rgb;
+    return diffuse * base + specular;
 }
 
 fn lit(n: vec3<f32>, albedo: vec3<f32>) -> vec3<f32> {

@@ -1,7 +1,7 @@
-//! Procedurally generated MatCaps: no bundled images, no licensing questions.
-//!
-//! Each preset shades a hemisphere of view-space normals; the result is stored as sRGB bytes
-//! so the same pixels feed both the GPU texture and the egui thumbnails.
+//! MatCaps: most are generated (each preset shades a hemisphere of view-space normals), two
+//! come from Blender's CC0 set (`assets/matcap`). Like Blender's, a MatCap has a diffuse part,
+//! multiplied by the object color, and a specular part added on top; generated ones only have
+//! the diffuse part. Both are stored as sRGB bytes, side by side in one GPU texture.
 
 use glam::Vec3;
 
@@ -10,40 +10,89 @@ pub const SIZE: usize = 256;
 #[derive(Clone, Copy)]
 pub struct Preset {
     pub name: &'static str,
-    shade: fn(n: Vec3) -> Vec3,
+    source: Source,
 }
 
+#[derive(Clone, Copy)]
+enum Source {
+    Shade(fn(n: Vec3) -> Vec3),
+    /// A Blender MatCap: multilayer EXR with `diffuse.*` and `specular.*` channels.
+    Exr(&'static [u8]),
+}
+
+const fn shade(name: &'static str, f: fn(Vec3) -> Vec3) -> Preset {
+    Preset { name, source: Source::Shade(f) }
+}
+
+// New presets go at the end: settings store the index.
 pub const PRESETS: &[Preset] = &[
-    Preset { name: "Clay", shade: clay },
-    Preset { name: "Clay Dark", shade: clay_dark },
-    Preset { name: "Studio Gloss", shade: gloss },
-    Preset { name: "Chrome", shade: chrome },
-    Preset { name: "Red Wax", shade: red_wax },
-    Preset { name: "Jade", shade: jade },
-    Preset { name: "Skin", shade: skin },
-    Preset { name: "Toon", shade: toon },
-    Preset { name: "Rim Light", shade: rim_light },
-    Preset { name: "Normals", shade: normals },
+    shade("Clay", clay),
+    shade("Clay Dark", clay_dark),
+    shade("Studio Gloss", gloss),
+    shade("Chrome", chrome),
+    shade("Red Wax", red_wax),
+    shade("Jade", jade),
+    shade("Skin", skin),
+    shade("Toon", toon),
+    shade("Rim Light", rim_light),
+    shade("Normals", normals),
+    Preset { name: "Clay Warm", source: Source::Exr(include_bytes!("../../assets/matcap/clay_warm.exr")) },
+    Preset { name: "Basic Bright", source: Source::Exr(include_bytes!("../../assets/matcap/basic_bright.exr")) },
 ];
 
-/// Returns SIZE*SIZE sRGB RGBA8 pixels.
-pub fn generate(index: usize) -> Vec<u8> {
+/// Object color the thumbnails show image MatCaps on (Blender's default material gray).
+const PREVIEW_BASE: f32 = 0.8;
+
+/// A preset's diffuse and specular parts, SIZE*SIZE sRGB RGBA8 pixels each.
+pub struct Matcap {
+    pub diffuse: Vec<u8>,
+    pub specular: Vec<u8>,
+}
+
+pub fn generate(index: usize) -> Matcap {
     let preset = PRESETS[index.min(PRESETS.len() - 1)];
+    let black = vec![0u8; SIZE * SIZE * 4];
+    match preset.source {
+        Source::Shade(f) => Matcap { diffuse: bake(&f), specular: black },
+        Source::Exr(bytes) => match read_exr(bytes) {
+            Some([d, s]) => Matcap { diffuse: bake(&|n| d.sample(n)), specular: bake(&|n| s.sample(n)) },
+            None => Matcap { diffuse: bake(&clay), specular: black },
+        },
+    }
+}
+
+/// What the picker shows: the MatCap on a plain gray object.
+pub fn preview(index: usize) -> Vec<u8> {
+    let image = matches!(PRESETS[index.min(PRESETS.len() - 1)].source, Source::Exr(_));
+    let m = generate(index);
+    let mut out = m.diffuse;
+    if image {
+        for (d, s) in out.chunks_exact_mut(4).zip(m.specular.chunks_exact(4)) {
+            for ch in 0..3 {
+                d[ch] = linear_to_srgb_u8(srgb_u8_to_linear(d[ch]) * PREVIEW_BASE + srgb_u8_to_linear(s[ch]));
+            }
+        }
+    }
+    out
+}
+
+fn bake(shade: &dyn Fn(Vec3) -> Vec3) -> Vec<u8> {
     let mut out = Vec::with_capacity(SIZE * SIZE * 4);
     for y in 0..SIZE {
         for x in 0..SIZE {
             let u = (x as f32 + 0.5) / SIZE as f32 * 2.0 - 1.0;
             let v = -((y as f32 + 0.5) / SIZE as f32 * 2.0 - 1.0);
-            // Clamp outside the disc to its rim so edge samples never pick up garbage.
+            // Clamp outside the disc to its rim so edge samples never pick up garbage (or an
+            // image's anti-aliased border).
             let r2 = u * u + v * v;
-            let (u, v) = if r2 > 0.999 {
-                let s = 0.999f32.sqrt() / r2.sqrt();
+            let (u, v) = if r2 > 0.98 {
+                let s = 0.98f32.sqrt() / r2.sqrt();
                 (u * s, v * s)
             } else {
                 (u, v)
             };
             let n = Vec3::new(u, v, (1.0 - u * u - v * v).max(0.0).sqrt());
-            let c = (preset.shade)(n);
+            let c = shade(n);
             for ch in c.to_array() {
                 out.push(linear_to_srgb_u8(ch));
             }
@@ -51,6 +100,56 @@ pub fn generate(index: usize) -> Vec<u8> {
         }
     }
     out
+}
+
+/// One layer of an image MatCap: linear RGB, rows top to bottom, the disc filling the square.
+struct Layer {
+    width: usize,
+    height: usize,
+    rgb: Vec<Vec3>,
+}
+
+impl Layer {
+    /// Bilinear sample where the view-space normal `n` points.
+    fn sample(&self, n: Vec3) -> Vec3 {
+        let x = ((n.x * 0.5 + 0.5) * self.width as f32 - 0.5).clamp(0.0, (self.width - 1) as f32);
+        let y = ((0.5 - n.y * 0.5) * self.height as f32 - 0.5).clamp(0.0, (self.height - 1) as f32);
+        let (x0, y0) = (x as usize, y as usize);
+        let (x1, y1) = ((x0 + 1).min(self.width - 1), (y0 + 1).min(self.height - 1));
+        let (fx, fy) = (x - x0 as f32, y - y0 as f32);
+        let at = |x: usize, y: usize| self.rgb[y * self.width + x];
+        at(x0, y0).lerp(at(x1, y0), fx).lerp(at(x0, y1).lerp(at(x1, y1), fx), fy)
+    }
+}
+
+/// Diffuse and specular layers of a Blender MatCap EXR.
+fn read_exr(bytes: &[u8]) -> Option<[self::Layer; 2]> {
+    use exr::prelude::*;
+    let image = read()
+        .no_deep_data()
+        .largest_resolution_level()
+        .all_channels()
+        .first_valid_layer()
+        .all_attributes()
+        .from_buffered(std::io::Cursor::new(bytes))
+        .ok()?;
+    let layer = &image.layer_data;
+    let (width, height) = (layer.size.0, layer.size.1);
+    let channel = |name: String| -> Option<Vec<f32>> {
+        let ch = layer.channel_data.list.iter().find(|c| c.name.to_string() == name)?;
+        Some(ch.sample_data.values_as_f32().collect())
+    };
+    let layer_of = |prefix: &str| -> Option<self::Layer> {
+        let (r, g, b) = (channel(format!("{prefix}.R"))?, channel(format!("{prefix}.G"))?, channel(format!("{prefix}.B"))?);
+        let rgb = (0..width * height).map(|i| Vec3::new(r[i], g[i], b[i]).max(Vec3::ZERO)).collect();
+        Some(self::Layer { width, height, rgb })
+    };
+    Some([layer_of("diffuse")?, layer_of("specular")?])
+}
+
+fn srgb_u8_to_linear(b: u8) -> f32 {
+    let c = b as f32 / 255.0;
+    if c <= 0.040_45 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
 }
 
 fn linear_to_srgb_u8(c: f32) -> u8 {
@@ -161,3 +260,4 @@ fn normals(n: Vec3) -> Vec3 {
     // Stored as sRGB, so undo the encoding to keep the familiar normal-map colors.
     Vec3::new(c.x.powf(2.2), c.y.powf(2.2), c.z.powf(2.2))
 }
+

@@ -33,6 +33,21 @@ pub(super) struct Compare {
     pub(super) matcap_b: usize,
 }
 
+impl Compare {
+    /// B's settings: A's, with B's own shading style when comparing styles of one model.
+    pub(super) fn settings_b(&self, a: &Settings) -> Settings {
+        let mut b = a.clone();
+        if self.is_same_model {
+            b.shading = self.style_b;
+            b.show_wire_overlay = self.wire_overlay_b;
+            if self.style_b == ShadingMode::Solid {
+                b.matcap = self.matcap_b;
+            }
+        }
+        b
+    }
+}
+
 impl ViewerApp {
     pub(super) fn compare_dialog(&mut self, ctx: &egui::Context) {
         let picked = rfd::FileDialog::new()
@@ -159,14 +174,7 @@ impl ViewerApp {
         let (grid_cell, grid_fade, grid_axis) = grid_params(&self.camera);
         let print_scale = self.print_scale();
         let (Some(c), Some(rs)) = (&mut self.compare, frame.wgpu_render_state()) else { return };
-        let mut settings_b = effective.clone();
-        if c.is_same_model {
-            settings_b.shading = c.style_b;
-            settings_b.show_wire_overlay = c.wire_overlay_b;
-            if c.style_b == ShadingMode::Solid {
-                settings_b.matcap = c.matcap_b;
-            }
-        }
+        let settings_b = c.settings_b(&effective);
         let scene = None;
         let target = match c.mode {
             CompareMode::SideBySide => Rect::from_min_max(pos2((rect.center().x + 1.0).round(), rect.min.y), rect.max),
@@ -268,7 +276,11 @@ impl ViewerApp {
         };
         let bottom = rect.bottom() - if self.section.is_some() { 64.0 } else { 16.0 };
         let (mode, split) = (c.mode, c.split);
+        // The overlays switch hides chips and guides; the Split divider stays draggable and
+        // shows itself while the pointer is on it.
+        let overlays = self.settings.show_overlays;
         match mode {
+            CompareMode::SideBySide if !overlays => {}
             CompareMode::SideBySide => {
                 let a = self.compare_rect_a(rect);
                 name_chip(ui, "A", &a_name, pos2(a.center().x, bottom), Align2::CENTER_BOTTOM);
@@ -276,8 +288,10 @@ impl ViewerApp {
             }
             CompareMode::Split => {
                 let x = rect.left() + rect.width() * split;
-                name_chip(ui, "A", &a_name, pos2(x - 14.0, bottom), Align2::RIGHT_BOTTOM);
-                name_chip(ui, "B", &b_name, pos2(x + 14.0, bottom), Align2::LEFT_BOTTOM);
+                if overlays {
+                    name_chip(ui, "A", &a_name, pos2(x - 14.0, bottom), Align2::RIGHT_BOTTOM);
+                    name_chip(ui, "B", &b_name, pos2(x + 14.0, bottom), Align2::LEFT_BOTTOM);
+                }
                 // Divider: drag it to wipe between the two models.
                 let hit = Rect::from_center_size(pos2(x, rect.center().y), vec2(14.0, rect.height()));
                 let r = ui.interact(hit, Id::new("compare_divider"), Sense::drag());
@@ -290,8 +304,11 @@ impl ViewerApp {
                         c.split = t;
                     }
                 }
+                if !overlays && !r.hovered() && !r.dragged() {
+                    return;
+                }
                 let painter = ui.painter();
-                if c.gradient > 0.001 {
+                if overlays && c.gradient > 0.001 {
                     let g = c.gradient.clamp(0.005, 0.45);
                     let x_min = rect.left() + rect.width() * (c.split - g).clamp(0.0, 1.0);
                     let x_max = rect.left() + rect.width() * (c.split + g).clamp(0.0, 1.0);

@@ -478,7 +478,7 @@ fn thumb_button(ui: &mut Ui, texture: egui::TextureId, size: Vec2, selected: boo
 fn matcap_picker(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails) {
     if thumbs.matcaps.is_empty() {
         for (i, preset) in matcap::PRESETS.iter().enumerate() {
-            let pixels = matcap::generate(i);
+            let pixels = matcap::preview(i);
             let image = egui::ColorImage::from_rgba_unmultiplied([matcap::SIZE, matcap::SIZE], &pixels);
             thumbs
                 .matcaps

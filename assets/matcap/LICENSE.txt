@@ -1,0 +1,11 @@
+MatCaps in this folder come unchanged from Blender's bundled studio lights
+(datafiles/studiolights/matcap), which Blender ships with this notice:
+
+    These matcap images are licensed as CC0 or public domain.
+    Thanks to the Blender community for contributing these matcaps.
+
+- clay_warm.exr: "Clay Warm" (sculpting matcaps by Bystedt).
+- basic_bright.exr: "Basic Bright".
+
+Each file holds a diffuse and a specular layer, combined as Blender does:
+diffuse × object color + specular.

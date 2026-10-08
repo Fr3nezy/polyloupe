@@ -102,7 +102,7 @@ impl ViewerApp {
         let mp4 = self.settings.turntable_mp4;
 
         // Frame size: the view's shape, long side as chosen, even (H.264 needs it).
-        let [vw, vh] = self.viewport_px;
+        let [vw, vh] = self.export_view_px();
         let long = self.settings.turntable_size as f32;
         let k = long / vw.max(vh).max(1) as f32;
         let even = |v: f32| ((v / 2.0).round() as u32 * 2).max(2);
