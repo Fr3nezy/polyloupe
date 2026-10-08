@@ -98,6 +98,10 @@ pub struct Material {
     pub metallic_tex: Option<ChannelTex>,
     pub roughness_tex: Option<ChannelTex>,
     pub occlusion_tex: Option<ChannelTex>,
+    pub clearcoat: f32,
+    pub clearcoat_roughness: f32,
+    pub transmission: f32,
+    pub ior: f32,
 }
 
 impl Default for Material {
@@ -117,6 +121,10 @@ impl Default for Material {
             metallic_tex: None,
             roughness_tex: None,
             occlusion_tex: None,
+            clearcoat: 0.0,
+            clearcoat_roughness: 0.0,
+            transmission: 0.0,
+            ior: 1.5,
         }
     }
 }

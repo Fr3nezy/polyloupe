@@ -130,14 +130,20 @@ impl ViewerApp {
         self.transforms_changed(true);
     }
 
-    /// Moves `targets` straight down (or up) until their lowest point touches Z = 0.
+    /// Moves `targets` down (or up) together as one assembly until their lowest point touches Z = 0.
     fn drop_to_bed(&mut self, targets: &[usize], undo: bool) {
-        let Some(info) = &self.info else { return };
-        let lifts: Vec<(usize, f32)> = targets.iter().map(|&i| (i, -info.objects[i].bounds.min.z)).filter(|(_, d)| d.is_finite()).collect();
+        if targets.is_empty() {
+            return;
+        }
+        let bounds = self.targets_bounds(targets);
+        let lift = -bounds.min.z;
+        if !lift.is_finite() {
+            return;
+        }
         if undo {
             self.push_transform_undo(self.user_transforms.clone());
         }
-        for (i, lift) in lifts {
+        for &i in targets {
             self.user_transforms[i] = Mat4::from_translation(Vec3::Z * lift) * self.user_transforms[i];
         }
         self.transforms_changed(true);
@@ -589,8 +595,10 @@ impl ViewerApp {
                     } else {
                         tr("Select an object").to_string()
                     };
-                    let (r, _) = ui.allocate_exact_size(vec2(170.0, theme::TOOLBAR_HEIGHT), Sense::hover());
-                    ui.painter().text(r.left_center(), Align2::LEFT_CENTER, size, theme::mono(11.5), theme::TEXT);
+                    let font = theme::mono(11.5);
+                    let text_width = ui.painter().layout_no_wrap(size.clone(), font.clone(), theme::TEXT).size().x;
+                    let (r, _) = ui.allocate_exact_size(vec2(text_width + 16.0, theme::TOOLBAR_HEIGHT), Sense::hover());
+                    ui.painter().text(pos2(r.min.x + 6.0, r.center().y), Align2::LEFT_CENTER, size, font, theme::TEXT);
                     toolbar_separator(ui);
                     ui.add_enabled_ui(!targets.is_empty(), |ui| {
                         if text_button(ui, "Lay on face", self.lay_face_armed).on_hover_text(tr("Click a face to put it down on the bed (L)")).clicked() {

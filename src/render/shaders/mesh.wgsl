@@ -18,8 +18,10 @@ struct MaterialU {
     // x: metallic channel, y: roughness channel, z: occlusion channel,
     // w: flags (1 base, 2 normal, 4 metallic, 8 roughness, 16 occlusion, 32 emissive).
     channels: vec4<u32>,
-    // x: alpha cutoff, y: mode (0 opaque, 1 mask, 2 blend).
+    // x: alpha cutoff, y: mode (0 opaque, 1 mask, 2 blend), z: clearcoat, w: clearcoat roughness.
     alpha: vec4<f32>,
+    // x: transmission, y: ior, z: unused, w: unused.
+    extra: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -103,16 +105,24 @@ fn shadow_at(p: vec3<f32>, layer: i32, m: mat4x4<f32>, radius: f32, screen_pos: 
     return sum / 32.0;
 }
 
+struct PbrOut {
+    diffuse: vec3<f32>,
+    specular: vec3<f32>,
+};
+
 // GGX specular and Lambert diffuse from the key light, shadowed.
-fn key_light(p: vec3<f32>, n: vec3<f32>, v: vec3<f32>, albedo: vec3<f32>, metallic: f32, rough: f32, screen_pos: vec2<f32>) -> vec3<f32> {
+fn key_light_pbr(p: vec3<f32>, n: vec3<f32>, v: vec3<f32>, albedo: vec3<f32>, metallic: f32, rough: f32, screen_pos: vec2<f32>) -> PbrOut {
+    var out: PbrOut;
+    out.diffuse = vec3<f32>(0.0);
+    out.specular = vec3<f32>(0.0);
     let l = g.light.xyz;
     let nl = dot(n, l);
     if nl <= 0.0 {
-        return vec3<f32>(0.0);
+        return out;
     }
     let lit = shadow_at(p + n * g.shadow.w, 0, g.light0, 1.0 + g.shadow.z, screen_pos);
     if lit <= 0.0 {
-        return vec3<f32>(0.0);
+        return out;
     }
     let h = normalize(l + v);
     let nv = max(dot(n, v), 1e-4);
@@ -121,12 +131,15 @@ fn key_light(p: vec3<f32>, n: vec3<f32>, v: vec3<f32>, albedo: vec3<f32>, metall
     let a2 = a * a;
     let d = nh * nh * (a2 - 1.0) + 1.0;
     let ndf = a2 / (PI * d * d);
-    let k = a * 0.5;
+    let k = (rough + 1.0) * (rough + 1.0) * 0.125;
     let vis = 0.25 / ((nl * (1.0 - k) + k) * (nv * (1.0 - k) + k));
     let f0 = mix(vec3<f32>(0.04), albedo, metallic);
     let f = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - max(dot(v, h), 0.0), 5.0);
     let diffuse = (vec3<f32>(1.0) - f) * (1.0 - metallic) * albedo / PI;
-    return (diffuse + f * ndf * vis) * nl * g.light.w * lit;
+    let spec = f * ndf * vis;
+    out.diffuse = diffuse * nl * g.light.w * lit;
+    out.specular = spec * nl * g.light.w * lit;
+    return out;
 }
 
 @group(1) @binding(0) var<uniform> obj: Object;
@@ -264,7 +277,7 @@ fn raw(v: vec3<f32>) -> vec3<f32> {
     return srgb_to_linear(clamp(v, vec3<f32>(0.0), vec3<f32>(1.0)));
 }
 
-fn ibl(n: vec3<f32>, v: vec3<f32>, base: vec3<f32>, metallic: f32, rough: f32) -> vec3<f32> {
+fn ibl_pbr(n: vec3<f32>, v: vec3<f32>, base: vec3<f32>, metallic: f32, rough: f32) -> PbrOut {
     let f0 = mix(vec3<f32>(0.04), base, metallic);
     let n_v = max(dot(n, v), 1e-4);
     let r = reflect(-v, n);
@@ -274,7 +287,44 @@ fn ibl(n: vec3<f32>, v: vec3<f32>, base: vec3<f32>, metallic: f32, rough: f32) -
     let irr = textureSampleLevel(env_irr, env_samp, equirect_uv(rotate_z(n, rot)), 0.0).rgb;
     let fr = f0 + (max(vec3<f32>(1.0 - rough), f0) - f0) * pow(1.0 - n_v, 5.0);
     let kd = (vec3<f32>(1.0) - fr) * (1.0 - metallic);
-    return (kd * base * irr + spec * (f0 * lut.x + lut.y)) * g.env.x;
+    var out: PbrOut;
+    out.diffuse = kd * base * irr * g.env.x;
+    out.specular = spec * (f0 * lut.x + lut.y) * g.env.x;
+    return out;
+}
+
+// Clearcoat specular from IBL and key light
+fn clearcoat_pbr(n: vec3<f32>, v: vec3<f32>, p: vec3<f32>, screen_pos: vec2<f32>) -> vec3<f32> {
+    let cc_factor = mat.alpha.z;
+    if cc_factor <= 0.0 {
+        return vec3<f32>(0.0);
+    }
+    let cc_rough = clamp(mat.alpha.w, 0.02, 1.0);
+    let n_v = max(dot(n, v), 1e-4);
+    let r = reflect(-v, n);
+    let rot = -g.params.w;
+    let cc_spec = textureSampleLevel(env_spec, env_samp, equirect_uv(rotate_z(r, rot)), cc_rough * g.env.z).rgb;
+    let cc_f_ibl = 0.04 + 0.96 * pow(1.0 - n_v, 5.0);
+    var spec = cc_factor * cc_spec * cc_f_ibl * g.env.x;
+
+    let l = g.light.xyz;
+    let nl = dot(n, l);
+    if nl > 0.0 && g.light.w > 0.0 {
+        let lit = shadow_at(p + n * g.shadow.w, 0, g.light0, 1.0 + g.shadow.z, screen_pos);
+        if lit > 0.0 {
+            let h = normalize(l + v);
+            let nh = max(dot(n, h), 0.0);
+            let a = cc_rough * cc_rough;
+            let a2 = a * a;
+            let d = nh * nh * (a2 - 1.0) + 1.0;
+            let ndf = a2 / (PI * d * d);
+            let k = (cc_rough + 1.0) * (cc_rough + 1.0) * 0.125;
+            let vis = 0.25 / ((nl * (1.0 - k) + k) * (n_v * (1.0 - k) + k));
+            let cc_f = 0.04 + 0.96 * pow(1.0 - max(dot(v, h), 0.0), 5.0);
+            spec += cc_factor * (cc_f * ndf * vis) * nl * g.light.w * lit;
+        }
+    }
+    return spec;
 }
 
 // --- Print finishes (Manufacturing workspace) ---
@@ -532,9 +582,40 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
             rough = f.rough;
             ao *= f.ao;
         }
-        color = ibl(n, v, albedo, clamp(metallic, 0.0, 1.0), clamp(rough, 0.03, 1.0)) * ao + emissive;
+        let ibl_res = ibl_pbr(n, v, albedo, clamp(metallic, 0.0, 1.0), clamp(rough, 0.02, 1.0));
+        var total_diffuse = ibl_res.diffuse * ao;
+        var total_specular = ibl_res.specular * ao;
         if g.light.w > 0.0 {
-            color += key_light(in.world_pos, n, v, albedo, clamp(metallic, 0.0, 1.0), clamp(rough, 0.05, 1.0), in.clip.xy) * ao;
+            let dir_res = key_light_pbr(in.world_pos, n, v, albedo, clamp(metallic, 0.0, 1.0), clamp(rough, 0.03, 1.0), in.clip.xy);
+            total_diffuse += dir_res.diffuse * ao;
+            total_specular += dir_res.specular * ao;
+        }
+
+        // Clearcoat specular layer (automotive paint, rims, carbon, lacquer)
+        let cc_spec = clearcoat_pbr(n, v, in.world_pos, in.clip.xy);
+        let n_v = max(dot(n, v), 1e-4);
+        let cc_f = 0.04 + 0.96 * pow(1.0 - n_v, 5.0);
+        let cc_factor = mat.alpha.z;
+        let cc_atten = 1.0 - cc_factor * cc_f;
+        total_diffuse *= cc_atten;
+        total_specular = total_specular * cc_atten + cc_spec;
+
+        // Transparent materials & Transmission (Glass, Windows, Headlights)
+        let transmission = mat.extra.x;
+        let is_transparent = (mat.alpha.y == 2.0 && base.a < 0.999) || transmission > 0.0;
+        if is_transparent {
+            let trans_amount = clamp(max(transmission, 1.0 - base.a), 0.0, 1.0);
+            total_diffuse *= (1.0 - trans_amount);
+
+            let fresnel = pow(1.0 - n_v, 5.0);
+            let base_op = select(base.a, (1.0 - transmission) * base.a + 0.1, transmission > 0.0);
+            alpha = clamp(base_op + (1.0 - base_op) * fresnel * (1.0 - rough), 0.02, 1.0);
+
+            // In alpha blending, fragment RGB is multiplied by alpha.
+            // Preserving specular through the blend so glass reflections gleam with full intensity:
+            color = total_diffuse + (total_specular / max(alpha, 0.08)) + emissive;
+        } else {
+            color = total_diffuse + total_specular + emissive;
         }
         color = view_transform(color * g.params.y, g.extra.y);
     } else if cmode == 4u {

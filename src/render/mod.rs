@@ -167,6 +167,7 @@ struct MaterialUniform {
     pbr: [f32; 4],
     channels: [u32; 4],
     alpha: [f32; 4],
+    extra: [f32; 4],
 }
 
 const OBJECT_SIZE: u64 = std::mem::size_of::<ObjectUniform>() as u64;
@@ -679,7 +680,8 @@ impl Renderer {
                     m.occlusion_tex.map_or(0, |t| t.channel as u32),
                     flags,
                 ],
-                alpha: [alpha_cutoff, alpha_mode, 0.0, 0.0],
+                alpha: [alpha_cutoff, alpha_mode, m.clearcoat, m.clearcoat_roughness],
+                extra: [m.transmission, m.ior, 0.0, 0.0],
             };
             let buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("material"),
