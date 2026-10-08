@@ -33,34 +33,42 @@ this repository by `scripts/build-installer.ps1`, and its SHA-256 is listed in t
   colors; the CAD kernel lives in its own DLL, loaded only when a STEP file is opened, and the
   meshed result is cached so the same file opens in a moment the next time.
 - Two workspaces, picked from the file type (switch in the viewport toolbar):
-  - Manufacturing (STL, 3MF, STEP, PLY): millimeters, a Move tool (W) with a transform gizmo,
-    Lay on face, Auto orient and Drop to bed for print orientation, Export Model to STL or 3MF,
-    and print finishes for quick renders (PLA, PETG, Silk PLA, resin, nylon SLS, metal SLM) with
-    layer lines that follow the bed. Parts show as plain satin plastic (a light grey you can change)
-    and ignore the file's materials and textures, unless you pick "File materials" in Shading.
+  - Manufacturing (STL, 3MF, STEP, PLY): millimeters, Move (W), Rotate (E) and Scale (R) with a
+    transform gizmo and Ctrl snapping, Lay on face, Auto orient and Drop to bed for print
+    orientation, Export Model to STL or 3MF. Part materials for quick renders: FDM plastic (PLA,
+    PLA Silk, PETG, ABS) and resin with layer lines that follow the bed, nylon SLS, metal
+    (polished, satin, brushed, blasted), with grain and scratches. Parts show as plain satin
+    plastic (a color you can change) unless you pick "File materials" in Shading.
   - 3D Art (glTF, FBX, OBJ, DAE): textures, UVs, channels and animation, in meters like Blender.
 - Explorer thumbnails for all of them (rendered by a small self-contained handler, like Blender's
   for .blend files), plus "Open with" and Default apps entries.
 - Wireframe, Solid and Rendered shading, like Blender:
-  - Solid: Studio, MatCap or Flat lighting; Material, Single, Random, Texture or Attribute color.
+  - Solid: Studio, MatCap (including Blender's Clay Warm and Basic Bright) or Flat lighting;
+    Material, Single, Random, Texture or Attribute color.
   - Texture channels: Base Color, Roughness, Metallic, Normal, AO, Emission, Alpha, UV grid,
     for the whole scene or per object (C / Shift+C cycle them).
-  - Rendered: PBR with image-based lighting, AgX. Blender's own HDRIs built in (Forest, the
-    Material Preview default, Studio, Sunset), plus your `.hdr` / `.exr` library.
+  - Rendered: PBR with image-based lighting, AgX, clearcoat and transmission. Blender's own
+    HDRIs built in (Forest, the Material Preview default, Studio, Sunset), plus your `.hdr` /
+    `.exr` library. Up to 6 lights you drag in the view, soft shadows, a shadow floor and a
+    studio backdrop.
 - Asset checks for artists:
   - Mesh check: non-manifold edges, open edges, overlapping vertices, degenerate faces.
   - Measure (M) with vertex snapping, per-axis deltas.
   - Cross-section along X, Y or Z with a hatched cap.
-  - A/B compare of two models (side by side or split, synced camera and animation).
+  - A/B compare of two models, or of two shading styles on one model (side by side or split
+    with a soft gradient, synced camera and animation).
   - UV layout pane (U) with the texture behind, mirrored and out-of-0–1 islands counted; show the selected objects or a whole texture set (every object using one material).
   - Normals and face orientation overlays, origins, scale and declared units, pivot.
   - Texel density and a triangle budget bar.
 - Animation: skinning, morph targets and node animation (glTF, FBX) with a Blender-style timeline.
-- Exports: image (F12, 1×/2×/4×, optionally transparent) and turntable (GIF, or MP4 with ffmpeg).
+- Render tab: images (F12) at viewport size, 1080p, 1440p, 4K, square, portrait or custom, with
+  2×/4× supersampling and an optional transparent background, and turntables (GIF, or MP4 with
+  ffmpeg). A comparison renders as the viewport shows it.
 - Navigation presets: Blender, Maya · Cinema 4D · Substance, ZBrush, 3ds Max, Unity · Unreal
   (RMB + WASD fly), CAD (SolidWorks); Z-up or Y-up axis labels.
 - English and Italian UI (follows Windows by default).
-- Renders only when something changes: no GPU usage while idle.
+- Renders only when something changes: no GPU usage while idle. A Performance mode
+  (Preferences > Viewport) keeps it smooth on integrated GPUs and older PCs.
 
 ## Screenshots
 
@@ -72,8 +80,10 @@ this repository by `scripts/build-installer.ps1`, and its SHA-256 is listed in t
 | UV layout of a whole texture set | UV grid checker |
 | ![Mesh check highlighting open edges](docs/media/mesh-check.jpg) | ![Cross-section of a car](docs/media/cross-section.jpg) |
 | Mesh check | Cross-section |
-| ![High and low poly tracks compared side by side](docs/media/compare.jpg) | |
-| A/B compare, high vs low poly | |
+| ![High and low poly tracks compared side by side](docs/media/compare.jpg) | ![A car rendered half shaded, half wireframe across the split divider](docs/media/0.2.0/split-render-car.webp) |
+| A/B compare, high vs low poly | Two shading styles in one render |
+| ![A sci-fi helmet in Rendered mode with a key light handle](docs/media/0.2.0/rendered-helmet.webp) | |
+| Rendered, with a light you drag | |
 
 ## Feedback
 
