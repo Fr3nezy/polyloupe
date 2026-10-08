@@ -10,7 +10,7 @@ ZBrush, Unity...), shows what's really in the model. Native, free and open sourc
 
 **Every polygon, up close.**
 
-![PolyLoupe showing a Ferrari F40 in Solid shading with the Info panel](docs/media/hero-f40.jpg)
+![PolyLoupe showing a sci-fi helmet in Rendered shading, with a key light handle](docs/media/0.2.0/rendered-helmet.webp)
 
 ## Download
 
@@ -83,8 +83,8 @@ this repository by `scripts/build-installer.ps1`, and its SHA-256 is listed in t
 | Mesh check | Cross-section |
 | ![High and low poly tracks compared side by side](docs/media/compare.jpg) | ![A car rendered half shaded, half wireframe across the split divider](docs/media/0.2.0/split-render-car.webp) |
 | A/B compare, high vs low poly | Two shading styles in one render |
-| ![A sci-fi helmet in Rendered mode with a key light handle](docs/media/0.2.0/rendered-helmet.webp) | |
-| Rendered, with a light you drag | |
+| ![A Ferrari F40 in Solid shading with the Info panel](docs/media/hero-f40.jpg) | |
+| Solid shading and the Info panel | |
 
 ## Feedback
 
