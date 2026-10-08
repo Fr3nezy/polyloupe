@@ -309,7 +309,7 @@ pub struct ViewerApp {
     show_prefs: bool,
     /// Turntable export window, and the encoding running in the background.
     show_turntable: bool,
-    turntable_job: Option<Receiver<Result<PathBuf, String>>>,
+    pub(super) turntable_job: Option<Receiver<Result<PathBuf, String>>>,
     applied_language: Option<Language>,
     /// Receives files from later launches while "Open files in the same window" is on.
     instance: Option<instance::Server>,
@@ -533,7 +533,7 @@ impl ViewerApp {
         }
     }
 
-    fn export_image(&mut self, ctx: &egui::Context) {
+    pub(super) fn export_image(&mut self, ctx: &egui::Context) {
         let stem = self.info.as_ref().map_or("render".to_string(), |i| {
             Path::new(&i.file_name).file_stem().map_or(i.file_name.clone(), |s| s.to_string_lossy().into_owned())
         });
@@ -554,17 +554,39 @@ impl ViewerApp {
         ctx.request_repaint();
     }
 
-    /// Saves the current view as a PNG, without UI and selection outlines.
+    pub(super) fn export_resolution_px(&self) -> [u32; 2] {
+        self.settings.render_resolution.dimensions(self.viewport_px, self.settings.render_custom_w, self.settings.render_custom_h)
+    }
+
+    /// Saves the current view as a PNG, with supersampling (SSAA) and chosen resolution.
     fn export_to(&mut self, path: &Path) -> Result<(), String> {
-        // 4x MSAA color + depth at 4096 px is already ~150 MB each; keep exports under that.
-        const MAX_SIDE: f32 = 4096.0;
-        let [w, h] = self.viewport_px;
-        let scale = (self.settings.export_scale.clamp(1, 4) as f32).min(MAX_SIDE / w.max(h).max(1) as f32);
-        let size = [(w as f32 * scale).round() as u32, (h as f32 * scale).round() as u32];
+        let [target_w, target_h] = self.export_resolution_px();
+        let ssaa = self.settings.render_ssaa.clamp(1, 4);
+
+        // Render at supersampled resolution (up to 8192 px max texture dimension).
+        const MAX_SIDE: u32 = 8192;
+        let mut render_w = target_w * ssaa;
+        let mut render_h = target_h * ssaa;
+        if render_w > MAX_SIDE || render_h > MAX_SIDE {
+            let k = MAX_SIDE as f32 / (render_w.max(render_h) as f32);
+            render_w = (render_w as f32 * k).round() as u32;
+            render_h = (render_h as f32 * k).round() as u32;
+        }
+
         let transparent = self.settings.export_transparent || self.settings.transparent_background;
-        match self.render_offscreen(size, transparent) {
-            Some(([w, h], pixels)) => image::save_buffer(path, &pixels, w, h, image::ColorType::Rgba8)
-                .map_err(|e| trf("Couldn't save the image: {error}", &[("error", &e)])),
+        match self.render_offscreen([render_w, render_h], transparent) {
+            Some(([w, h], pixels)) => {
+                if w != target_w || h != target_h {
+                    let img = image::RgbaImage::from_raw(w, h, pixels)
+                        .ok_or_else(|| tr("Couldn't render the image").to_string())?;
+                    let downsampled = image::imageops::resize(&img, target_w, target_h, image::imageops::FilterType::Lanczos3);
+                    downsampled.save(path)
+                        .map_err(|e| trf("Couldn't save the image: {error}", &[("error", &e)]))
+                } else {
+                    image::save_buffer(path, &pixels, w, h, image::ColorType::Rgba8)
+                        .map_err(|e| trf("Couldn't save the image: {error}", &[("error", &e)]))
+                }
+            }
             None => Err(tr("Couldn't render the image").to_string()),
         }
     }
@@ -1576,6 +1598,7 @@ impl ViewerApp {
             self.draw_section(ui, rect_a);
             self.draw_origins(ui, rect_a);
             self.draw_transform_gizmo(ui, rect_a);
+            self.draw_render_framing_guide(ui, rect_a);
 
             let overlays = self.settings.show_overlays;
             if overlays {
@@ -1737,8 +1760,8 @@ impl ViewerApp {
             }
             return;
         }
-        // Hold the shot until the mesh analysis (and model B) are in.
-        if cap.frames > 2 && (self.qa_rx.is_some() || self.compare_loading.is_some()) {
+        // Hold the shot until the model, mesh analysis (and model B) are in.
+        if cap.frames > 2 && (self.loading.is_some() || self.qa_rx.is_some() || self.compare_loading.is_some()) {
             return;
         }
         if cap.opts.compare_split {
@@ -1798,6 +1821,10 @@ impl ViewerApp {
                 Some("shading") => {
                     self.settings.show_sidebar = true;
                     self.inspector_tab = InspectorTab::Shading;
+                }
+                Some("render") => {
+                    self.settings.show_sidebar = true;
+                    self.inspector_tab = InspectorTab::Render;
                 }
                 _ => {}
             }

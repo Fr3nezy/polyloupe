@@ -76,7 +76,7 @@ impl ViewerApp {
         }
     }
 
-    fn export_turntable(&mut self, ctx: &egui::Context) {
+    pub(super) fn export_turntable(&mut self, ctx: &egui::Context) {
         let mp4 = self.settings.turntable_mp4;
         if mp4 && !ffmpeg_available() {
             self.show_toast(ctx, tr("MP4 needs ffmpeg on the PATH (winget install ffmpeg). GIF works without it.").to_string(), true);
@@ -199,7 +199,7 @@ fn ffmpeg_command() -> Command {
     cmd
 }
 
-fn ffmpeg_available() -> bool {
+pub(super) fn ffmpeg_available() -> bool {
     static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *AVAILABLE.get_or_init(|| {
         ffmpeg_command().arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success())

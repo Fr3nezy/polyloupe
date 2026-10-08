@@ -46,6 +46,12 @@ struct Globals {
     light1: mat4x4<f32>,
     // Key light: xyz unit direction towards the light, w intensity (0 = no key light).
     light: vec4<f32>,
+    // Key light color: linear RGB, w unused.
+    light_color: vec4<f32>,
+    // Secondary / Fill light: xyz unit direction, w intensity (0 = off).
+    light2: vec4<f32>,
+    // Secondary / Fill light color: linear RGB, w unused.
+    light2_color: vec4<f32>,
     // x 1 to draw the shadow floor, y floor height, z softness (shadow map texels),
     // w normal offset against shadow acne (world units).
     shadow: vec4<f32>,

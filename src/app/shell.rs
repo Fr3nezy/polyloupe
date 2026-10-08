@@ -9,12 +9,13 @@ use eframe::egui::{
 
 use super::*;
 use crate::i18n::thousands;
+use crate::settings::RenderResolution;
 use crate::ui::widgets::{dashed_rect, primary_button, stat_card, table, tag, text_button, tool_button, toolbar, toolbar_separator};
 
 pub(super) const TITLE_HEIGHT: f32 = 44.0;
 pub(super) const FOOTER_HEIGHT: f32 = 32.0;
 pub(super) const RAIL_WIDTH: f32 = 52.0;
-pub(super) const INSPECTOR_WIDTH: f32 = 320.0;
+pub(super) const INSPECTOR_WIDTH: f32 = 340.0;
 const RESIZE_MARGIN: f32 = 5.0;
 
 /// Left-drag behavior chosen in the tool rail (the navigation preset's own mouse keys always work).
@@ -45,6 +46,7 @@ impl Tool {
 pub(super) enum InspectorTab {
     Info,
     Shading,
+    Render,
     Materials,
     Scene,
 }
@@ -770,6 +772,58 @@ impl ViewerApp {
         }
     }
 
+    /// Darkens areas outside the target render aspect ratio (passepartout) when the Render tab is open.
+    pub(super) fn draw_render_framing_guide(&self, ui: &Ui, viewport: Rect) {
+        if !self.settings.show_sidebar
+            || self.inspector_tab != InspectorTab::Render
+            || !self.settings.render_framing_guide
+        {
+            return;
+        }
+        let [target_w, target_h] = self.export_resolution_px();
+        if target_w == 0 || target_h == 0 {
+            return;
+        }
+        let target_aspect = target_w as f32 / target_h as f32;
+        let vp_aspect = viewport.width() / viewport.height().max(1.0);
+
+        if (target_aspect - vp_aspect).abs() < 0.005 {
+            return;
+        }
+
+        let painter = ui.painter().with_clip_rect(viewport);
+        let mask_color = Color32::from_black_alpha(150);
+        let border_stroke = Stroke::new(1.5, Color32::from_white_alpha(160));
+
+        if target_aspect < vp_aspect {
+            let frame_w = viewport.height() * target_aspect;
+            let x0 = viewport.center().x - frame_w * 0.5;
+            let x1 = viewport.center().x + frame_w * 0.5;
+
+            let left_rect = Rect::from_min_max(viewport.min, pos2(x0, viewport.max.y));
+            let right_rect = Rect::from_min_max(pos2(x1, viewport.min.y), viewport.max);
+            let frame_rect = Rect::from_min_max(pos2(x0, viewport.min.y), pos2(x1, viewport.max.y));
+
+            painter.rect_filled(left_rect, CornerRadius::ZERO, mask_color);
+            painter.rect_filled(right_rect, CornerRadius::ZERO, mask_color);
+            painter.rect_stroke(frame_rect, CornerRadius::ZERO, border_stroke, StrokeKind::Inside);
+        } else {
+            let frame_h = viewport.width() / target_aspect;
+            let y0 = viewport.center().y - frame_h * 0.5;
+            let y1 = viewport.center().y + frame_h * 0.5;
+
+            if y0 >= viewport.min.y && y1 <= viewport.max.y {
+                let top_rect = Rect::from_min_max(viewport.min, pos2(viewport.max.x, y0));
+                let bottom_rect = Rect::from_min_max(pos2(viewport.min.x, y1), viewport.max);
+                let frame_rect = Rect::from_min_max(pos2(viewport.min.x, y0), pos2(viewport.max.x, y1));
+
+                painter.rect_filled(top_rect, CornerRadius::ZERO, mask_color);
+                painter.rect_filled(bottom_rect, CornerRadius::ZERO, mask_color);
+                painter.rect_stroke(frame_rect, CornerRadius::ZERO, border_stroke, StrokeKind::Inside);
+            }
+        }
+    }
+
     /// Outline of the section plane across the scene bounds.
     pub(super) fn draw_section(&self, ui: &Ui, viewport: Rect) {
         let (Some(s), Some(plane)) = (self.section, self.section_plane()) else { return };
@@ -927,7 +981,11 @@ impl ViewerApp {
             ui.add_space(8.0);
             ui.spacing_mut().item_spacing.x = 4.0;
             // Manufacturing ignores the file's materials and textures, so it has no tab for them.
-            let mut tabs = vec![(InspectorTab::Info, "Info"), (InspectorTab::Shading, "Shading")];
+            let mut tabs = vec![
+                (InspectorTab::Info, "Info"),
+                (InspectorTab::Shading, "Shading"),
+                (InspectorTab::Render, "Render"),
+            ];
             if !self.manufacturing() {
                 tabs.push((InspectorTab::Materials, "Materials"));
             }
@@ -950,12 +1008,22 @@ impl ViewerApp {
         let y = ui.cursor().top();
         ui.painter().hline(line, y, Stroke::new(1.0, theme::BORDER));
 
-        // Viewport settings don't need a model.
+        // Viewport and render settings don't need a model.
         if self.inspector_tab == InspectorTab::Shading {
             ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 Frame::new().inner_margin(Margin::same(16)).show(ui, |ui| {
                     widgets::begin_cards(ui);
                     self.shading_tab(ui);
+                    widgets::end_cards(ui);
+                });
+            });
+            return;
+        }
+        if self.inspector_tab == InspectorTab::Render {
+            ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                Frame::new().inner_margin(Margin::same(16)).show(ui, |ui| {
+                    widgets::begin_cards(ui);
+                    self.render_tab(ui);
                     widgets::end_cards(ui);
                 });
             });
@@ -989,7 +1057,7 @@ impl ViewerApp {
                 });
             }
             InspectorTab::Scene => Frame::new().inner_margin(Margin::same(8)).show(ui, |ui| self.scene_tab(ui)).inner,
-            InspectorTab::Shading => {}
+            InspectorTab::Shading | InspectorTab::Render => {}
         }
     }
 
@@ -1012,6 +1080,194 @@ impl ViewerApp {
         let action = popovers::shading(ui, &mut self.settings, &mut self.thumbs, manufacturing);
         if let Some(a) = action {
             self.apply_popover_action(a);
+        }
+    }
+
+    /// Dedicated Render tab: resolution, supersampling, lights and shadows, turntable and export.
+    fn render_tab(&mut self, ui: &mut Ui) {
+        let has_model = self.info.is_some();
+        let ctx = ui.ctx().clone();
+        let mut do_export_image = false;
+        let mut do_export_turntable = false;
+        let busy = self.turntable_job.is_some();
+
+        {
+            let s = &mut self.settings;
+
+            // --- SHADING QUICK SWITCH ---
+            widgets::section(ui, "Shading Mode");
+            ui.horizontal(|ui| {
+                widgets::segmented(
+                    ui,
+                    &mut s.shading,
+                    &[(ShadingMode::Wireframe, "Wireframe"), (ShadingMode::Solid, "Solid"), (ShadingMode::Rendered, "Rendered")],
+                );
+            });
+
+            // --- RESOLUTION & QUALITY ---
+            widgets::section(ui, "Resolution");
+            let current_label = s.render_resolution.label();
+            egui::ComboBox::from_id_salt("render_res_preset")
+                .selected_text(tr(current_label))
+                .width(ui.available_width() - 8.0)
+                .show_ui(ui, |ui| {
+                    for r in RenderResolution::ALL {
+                        ui.selectable_value(&mut s.render_resolution, r, tr(r.label()));
+                    }
+                });
+
+            if s.render_resolution == RenderResolution::Custom {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(tr("Size:")).color(theme::TEXT_DIM));
+                    ui.add(egui::DragValue::new(&mut s.render_custom_w).range(64..=8192).suffix(" px").speed(2.0));
+                    ui.label("×");
+                    ui.add(egui::DragValue::new(&mut s.render_custom_h).range(64..=8192).suffix(" px").speed(2.0));
+                });
+            }
+
+            let [eff_w, eff_h] = s.render_resolution.dimensions(self.viewport_px, s.render_custom_w, s.render_custom_h);
+            ui.label(
+                RichText::new(trf("Output: {w} × {h} px", &[("w", &eff_w), ("h", &eff_h)]))
+                    .size(11.0)
+                    .color(theme::TEXT_DIM),
+            );
+
+            widgets::section(ui, "Quality (SSAA)");
+            ui.horizontal(|ui| {
+                widgets::segmented(
+                    ui,
+                    &mut s.render_ssaa,
+                    &[(1, "1× Normal"), (2, "2× High"), (4, "4× Ultra")],
+                );
+            });
+            let ssaa_hint = match s.render_ssaa {
+                1 => tr("Standard 4× MSAA. Fastest rendering."),
+                2 => tr("2× Supersampling (SSAA) + Lanczos3 filter. Razor-sharp speculars and edges."),
+                _ => tr("4× Ultra Supersampling. Master resolution for prints and fine details."),
+            };
+            ui.label(RichText::new(ssaa_hint).size(11.0).color(theme::TEXT_DIM));
+
+            ui.add_space(4.0);
+            ui.checkbox(&mut s.render_framing_guide, tr("Framing guide (Passepartout)"))
+                .on_hover_text(tr("Darkens regions outside the render aspect ratio in the viewport"));
+
+            ui.checkbox(&mut s.export_transparent, tr("Transparent background"))
+                .on_hover_text(tr("Export PNG with alpha transparency (disables background sky)"));
+
+            ui.checkbox(&mut s.export_grid, tr("Include floor grid"));
+
+            ui.add_space(6.0);
+            ui.add_enabled_ui(has_model, |ui| {
+                if primary_button(ui, "Render Image…", 36.0, Some("F12")).on_hover_text(tr("Render and save image (F12)")).clicked() {
+                    do_export_image = true;
+                }
+            });
+            if !has_model {
+                ui.label(RichText::new(tr("Open a file to render.")).size(11.0).color(theme::TEXT_DIM));
+            }
+
+            ui.separator();
+
+            // --- LIGHTS AND SHADOWS ---
+            widgets::section(ui, "Primary Light");
+            ui.horizontal(|ui| {
+                widgets::segmented(
+                    ui,
+                    &mut s.light_follow_env,
+                    &[(true, "Follow HDRI"), (false, "Custom")],
+                );
+            });
+            if s.light_follow_env {
+                ui.label(RichText::new(tr("Tracks the brightest point in the sky; turns with Environment rotation.")).size(11.0).color(theme::TEXT_DIM));
+            } else {
+                ui.add(egui::Slider::new(&mut s.light_yaw, 0.0..=360.0).suffix("°").text(tr("Angle (Yaw)")));
+                ui.add(egui::Slider::new(&mut s.light_pitch, 5.0..=89.0).suffix("°").text(tr("Elevation (Pitch)")));
+            }
+
+            ui.add(egui::Slider::new(&mut s.light_strength, 0.0..=3.0).text(tr("Intensity")));
+
+            ui.horizontal(|ui| {
+                ui.color_edit_button_srgb(&mut s.light_color);
+                ui.label(tr("Light color"));
+                for (col, tip) in [
+                    ([255, 255, 255], "Pure White"),
+                    ([255, 224, 178], "Warm 3200K"),
+                    ([255, 244, 229], "Daylight 5500K"),
+                    ([227, 242, 253], "Cool 6500K"),
+                    ([255, 213, 79], "Golden Hour"),
+                ] {
+                    let (rect, r) = ui.allocate_exact_size(Vec2::splat(14.0), Sense::click());
+                    ui.painter().rect_filled(rect, CornerRadius::same(2), Color32::from_rgb(col[0], col[1], col[2]));
+                    if r.on_hover_text(tr(tip)).clicked() {
+                        s.light_color = col;
+                    }
+                }
+            });
+
+            ui.checkbox(&mut s.shadows, tr("Model shadows"))
+                .on_hover_text(tr("Primary light casts shadows on the model"));
+            ui.checkbox(&mut s.floor_shadow, tr("Shadow on the floor"))
+                .on_hover_text(tr("A floor under the model that catches its shadow and contact shading"));
+            ui.add_enabled_ui(s.shadows || s.floor_shadow, |ui| {
+                ui.add(egui::Slider::new(&mut s.shadow_softness, 0.0..=1.0).text(tr("Softness")));
+            });
+
+            ui.add_space(4.0);
+            widgets::section(ui, "Secondary / Fill Light");
+            ui.checkbox(&mut s.light2_enabled, tr("Enable Fill Light"))
+                .on_hover_text(tr("Add a secondary studio light for rim or fill illumination"));
+
+            if s.light2_enabled {
+                ui.add(egui::Slider::new(&mut s.light2_yaw, 0.0..=360.0).suffix("°").text(tr("Angle (Yaw)")));
+                ui.add(egui::Slider::new(&mut s.light2_pitch, -60.0..=85.0).suffix("°").text(tr("Elevation (Pitch)")));
+                ui.add(egui::Slider::new(&mut s.light2_strength, 0.0..=2.0).text(tr("Intensity")));
+                ui.horizontal(|ui| {
+                    ui.color_edit_button_srgb(&mut s.light2_color);
+                    ui.label(tr("Light color"));
+                });
+            }
+
+            ui.separator();
+
+            // --- TURNTABLE ---
+            widgets::section(ui, "Turntable (360° Animation)");
+            ui.horizontal(|ui| {
+                widgets::segmented(ui, &mut s.turntable_mp4, &[(false, "GIF"), (true, "MP4")]);
+            });
+            if s.turntable_mp4 && !super::turntable::ffmpeg_available() {
+                ui.label(
+                    RichText::new(tr("MP4 needs ffmpeg on PATH (winget install ffmpeg). GIF works natively."))
+                        .size(11.0)
+                        .color(theme::ERROR),
+                );
+            }
+            ui.horizontal(|ui| {
+                widgets::segmented(ui, &mut s.turntable_size, &[(480, "480"), (720, "720"), (1080, "1080")]);
+            });
+            ui.add(egui::Slider::new(&mut s.turntable_seconds, 2.0..=12.0).step_by(0.5).suffix(" s").text(tr("Length")));
+            ui.add_enabled_ui(self.anim.as_ref().is_some_and(|a| a.has_clips()), |ui| {
+                ui.checkbox(&mut s.turntable_animate, tr("Play clip during turntable"));
+            });
+
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(has_model && !busy, |ui| {
+                    if ui.button(tr("Export Turntable…")).clicked() {
+                        do_export_turntable = true;
+                    }
+                });
+                if busy {
+                    ui.add(egui::Spinner::new().size(14.0));
+                    ui.label(RichText::new(tr("Encoding…")).size(11.0).color(theme::TEXT_DIM));
+                }
+            });
+        }
+
+        if do_export_image {
+            self.export_image(&ctx);
+        }
+        if do_export_turntable {
+            self.export_turntable(&ctx);
         }
     }
 

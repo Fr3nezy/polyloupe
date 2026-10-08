@@ -227,6 +227,61 @@ impl MetalFinish {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RenderResolution {
+    Viewport,
+    Viewport2x,
+    Fhd1080p,
+    Qhd1440p,
+    Uhd4k,
+    Square1k,
+    Square2k,
+    Portrait,
+    Custom,
+}
+
+impl RenderResolution {
+    pub const ALL: [RenderResolution; 9] = [
+        RenderResolution::Viewport,
+        RenderResolution::Viewport2x,
+        RenderResolution::Fhd1080p,
+        RenderResolution::Qhd1440p,
+        RenderResolution::Uhd4k,
+        RenderResolution::Square1k,
+        RenderResolution::Square2k,
+        RenderResolution::Portrait,
+        RenderResolution::Custom,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            RenderResolution::Viewport => "Viewport (1×)",
+            RenderResolution::Viewport2x => "Viewport (2×)",
+            RenderResolution::Fhd1080p => "1080p FHD (16:9)",
+            RenderResolution::Qhd1440p => "1440p 2K (16:9)",
+            RenderResolution::Uhd4k => "2160p 4K (16:9)",
+            RenderResolution::Square1k => "1080p Square (1:1)",
+            RenderResolution::Square2k => "2048p Square (1:1)",
+            RenderResolution::Portrait => "Portrait 4:5 (1080×1350)",
+            RenderResolution::Custom => "Custom",
+        }
+    }
+
+    pub fn dimensions(self, viewport_px: [u32; 2], custom_w: u32, custom_h: u32) -> [u32; 2] {
+        match self {
+            RenderResolution::Viewport => [viewport_px[0].max(1), viewport_px[1].max(1)],
+            RenderResolution::Viewport2x => [viewport_px[0].max(1) * 2, viewport_px[1].max(1) * 2],
+            RenderResolution::Fhd1080p => [1920, 1080],
+            RenderResolution::Qhd1440p => [2560, 1440],
+            RenderResolution::Uhd4k => [3840, 2160],
+            RenderResolution::Square1k => [1080, 1080],
+            RenderResolution::Square2k => [2048, 2048],
+            RenderResolution::Portrait => [1080, 1350],
+            RenderResolution::Custom => [custom_w.clamp(64, 8192), custom_h.clamp(64, 8192)],
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Environment {
     Preset(Preset),
@@ -343,6 +398,25 @@ pub struct Settings {
     pub light_strength: f32,
     /// 0 = crisp, 1 = very soft.
     pub shadow_softness: f32,
+    /// Key light: follow environment brightest spot or custom angles.
+    pub light_follow_env: bool,
+    pub light_yaw: f32,
+    pub light_pitch: f32,
+    pub light_color: [u8; 3],
+
+    /// Secondary / Fill light.
+    pub light2_enabled: bool,
+    pub light2_yaw: f32,
+    pub light2_pitch: f32,
+    pub light2_strength: f32,
+    pub light2_color: [u8; 3],
+
+    /// Dedicated Render tab resolution and quality options.
+    pub render_resolution: RenderResolution,
+    pub render_custom_w: u32,
+    pub render_custom_h: u32,
+    pub render_ssaa: u32,
+    pub render_framing_guide: bool,
 }
 
 impl Default for Settings {
@@ -417,6 +491,20 @@ impl Default for Settings {
             floor_shadow: true,
             light_strength: 1.0,
             shadow_softness: 0.4,
+            light_follow_env: true,
+            light_yaw: 45.0,
+            light_pitch: 55.0,
+            light_color: [255, 255, 255],
+            light2_enabled: false,
+            light2_yaw: 225.0,
+            light2_pitch: 35.0,
+            light2_strength: 0.6,
+            light2_color: [215, 230, 255],
+            render_resolution: RenderResolution::Viewport,
+            render_custom_w: 1920,
+            render_custom_h: 1080,
+            render_ssaa: 2,
+            render_framing_guide: true,
         }
     }
 }

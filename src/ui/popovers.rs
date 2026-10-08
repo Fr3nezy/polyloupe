@@ -398,17 +398,7 @@ fn rendered(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails) -> Option<Po
         ui.label(RichText::new(tr("Light gray sweep without the grid, for product shots")).size(11.0).color(theme::TEXT_DIM));
     }
 
-    widgets::section(ui, "Light and Shadows");
-    ui.checkbox(&mut s.shadows, tr("Key light shadows"))
-        .on_hover_text(tr("A light from the environment's brightest spot, casting shadows; it turns with the environment"));
-    ui.add_enabled_ui(s.shadows, |ui| {
-        ui.add(egui::Slider::new(&mut s.light_strength, 0.0..=3.0).text(tr("Light strength")));
-    });
-    ui.checkbox(&mut s.floor_shadow, tr("Shadow on the floor"))
-        .on_hover_text(tr("A floor under the model that catches its shadow and contact shading"));
-    ui.add_enabled_ui(s.shadows || s.floor_shadow, |ui| {
-        ui.add(egui::Slider::new(&mut s.shadow_softness, 0.0..=1.0).text(tr("Softness")));
-    });
+    ui.label(RichText::new(tr("Lights & Shadows configured in Render tab")).size(11.0).color(theme::TEXT_DIM));
 
     widgets::section(ui, "Color Management");
     ui.horizontal(|ui| {

@@ -653,6 +653,67 @@ fn italian_text(en: &str) -> Option<&'static str> {
         }
         "Include the floor grid" => "Includi la griglia a pavimento",
         "Close" => "Chiudi",
+
+        // Render tab & Lighting
+        "Render" => "Render",
+        "Size:" => "Dimensione:",
+        "Standard 4× MSAA. Fastest rendering." => "Standard 4× MSAA. Rendering più rapido.",
+        "2× Supersampling (SSAA) + Lanczos3 filter. Razor-sharp speculars and edges." => {
+            "2× Supersampling (SSAA) + filtro Lanczos3. Riflessi e bordi nitidi senza aliasing."
+        }
+        "4× Ultra Supersampling. Master resolution for prints and fine details." => {
+            "4× Ultra Supersampling. Risoluzione master per stampe e dettagli fini."
+        }
+        "Framing guide (Passepartout)" => "Guida inquadratura (Passepartout)",
+        "Darkens regions outside the render aspect ratio in the viewport" => {
+            "Scurisce le aree esterne al formato di rendering nel viewport"
+        }
+        "Export PNG with alpha transparency (disables background sky)" => {
+            "Esporta PNG con trasparenza alpha (disattiva lo sfondo)"
+        }
+        "Include floor grid" => "Includi griglia del piano",
+        "Render and save image (F12)" => "Esegue il render e salva l'immagine (F12)",
+        "Render Image…" => "Render immagine…",
+        "Open a file to render." => "Apri un file per effettuare il render.",
+        "Tracks the brightest point in the sky; turns with Environment rotation." => {
+            "Segue il punto più luminoso del cielo; ruota con l'ambiente."
+        }
+        "Angle (Yaw)" => "Angolo (Yaw)",
+        "Elevation (Pitch)" => "Elevazione (Pitch)",
+        "Intensity" => "Intensità",
+        "Light color" => "Colore luce",
+        "Model shadows" => "Ombre del modello",
+        "Primary light casts shadows on the model" => "La luce principale proietta ombre sul modello",
+        "Enable Fill Light" => "Abilita luce di riempimento",
+        "Add a secondary studio light for rim or fill illumination" => {
+            "Aggiunge una luce secondaria da studio per controluce o riempimento"
+        }
+        "MP4 needs ffmpeg on PATH (winget install ffmpeg). GIF works natively." => {
+            "MP4 richiede ffmpeg nel PATH (winget install ffmpeg). Le GIF funzionano nativamente."
+        }
+        "Play clip during turntable" => "Riproduci l'animazione durante la rotazione",
+        "Encoding…" => "Codifica in corso…",
+        "Output: {w} × {h} px" => "Risoluzione: {w} × {h} px",
+        "Lights & Shadows configured in Render tab" => "Luci e ombre configurate nella tab Render",
+        "Primary Light" => "Luce principale",
+        "Follow HDRI" => "Segui HDRI",
+        "Pure White" => "Bianco puro",
+        "Warm 3200K" => "Calda 3200K",
+        "Daylight 5500K" => "Daylight 5500K",
+        "Cool 6500K" => "Fredda 6500K",
+        "Golden Hour" => "Golden Hour",
+        "Secondary / Fill Light" => "Luce secondaria / Riempimento",
+        "Turntable (360° Animation)" => "Turntable (Animazione 360°)",
+        "Shading Mode" => "Modalità ombreggiatura",
+        "1080p FHD (16:9)" => "1080p FHD (16:9)",
+        "1440p 2K (16:9)" => "1440p 2K (16:9)",
+        "2160p 4K (16:9)" => "2160p 4K (16:9)",
+        "1080p Square (1:1)" => "1080p Quadrato (1:1)",
+        "2048p Square (1:1)" => "2048p Quadrato (1:1)",
+        "Portrait 4:5 (1080×1350)" => "Portrait 4:5 (1080×1350)",
+        "Viewport (1×)" => "Viewport (1×)",
+        "Viewport (2×)" => "Viewport (2×)",
+        "Quality (SSAA)" => "Qualità (SSAA)",
         _ => return None,
     })
 }

@@ -110,18 +110,13 @@ struct PbrOut {
     specular: vec3<f32>,
 };
 
-// GGX specular and Lambert diffuse from the key light, shadowed.
-fn key_light_pbr(p: vec3<f32>, n: vec3<f32>, v: vec3<f32>, albedo: vec3<f32>, metallic: f32, rough: f32, screen_pos: vec2<f32>) -> PbrOut {
+// GGX specular and Lambert diffuse for a directional light with color and intensity.
+fn directional_pbr(l: vec3<f32>, intensity: f32, color: vec3<f32>, p: vec3<f32>, n: vec3<f32>, v: vec3<f32>, albedo: vec3<f32>, metallic: f32, rough: f32, lit: f32) -> PbrOut {
     var out: PbrOut;
     out.diffuse = vec3<f32>(0.0);
     out.specular = vec3<f32>(0.0);
-    let l = g.light.xyz;
     let nl = dot(n, l);
-    if nl <= 0.0 {
-        return out;
-    }
-    let lit = shadow_at(p + n * g.shadow.w, 0, g.light0, 1.0 + g.shadow.z, screen_pos);
-    if lit <= 0.0 {
+    if nl <= 0.0 || intensity <= 0.0 || lit <= 0.0 {
         return out;
     }
     let h = normalize(l + v);
@@ -137,9 +132,27 @@ fn key_light_pbr(p: vec3<f32>, n: vec3<f32>, v: vec3<f32>, albedo: vec3<f32>, me
     let f = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - max(dot(v, h), 0.0), 5.0);
     let diffuse = (vec3<f32>(1.0) - f) * (1.0 - metallic) * albedo / PI;
     let spec = f * ndf * vis;
-    out.diffuse = diffuse * nl * g.light.w * lit;
-    out.specular = spec * nl * g.light.w * lit;
+    out.diffuse = diffuse * nl * intensity * lit * color;
+    out.specular = spec * nl * intensity * lit * color;
     return out;
+}
+
+fn clearcoat_direct(l: vec3<f32>, intensity: f32, color: vec3<f32>, n: vec3<f32>, v: vec3<f32>, cc_factor: f32, cc_rough: f32, lit: f32) -> vec3<f32> {
+    let nl = dot(n, l);
+    let n_v = max(dot(n, v), 1e-4);
+    if nl <= 0.0 || intensity <= 0.0 || lit <= 0.0 || cc_factor <= 0.0 {
+        return vec3<f32>(0.0);
+    }
+    let h = normalize(l + v);
+    let nh = max(dot(n, h), 0.0);
+    let a = cc_rough * cc_rough;
+    let a2 = a * a;
+    let d = nh * nh * (a2 - 1.0) + 1.0;
+    let ndf = a2 / (PI * d * d);
+    let k = (cc_rough + 1.0) * (cc_rough + 1.0) * 0.125;
+    let vis = 0.25 / ((nl * (1.0 - k) + k) * (n_v * (1.0 - k) + k));
+    let cc_f = 0.04 + 0.96 * pow(1.0 - max(dot(v, h), 0.0), 5.0);
+    return cc_factor * (cc_f * ndf * vis) * nl * intensity * lit * color;
 }
 
 @group(1) @binding(0) var<uniform> obj: Object;
@@ -307,22 +320,13 @@ fn clearcoat_pbr(n: vec3<f32>, v: vec3<f32>, p: vec3<f32>, screen_pos: vec2<f32>
     let cc_f_ibl = 0.04 + 0.96 * pow(1.0 - n_v, 5.0);
     var spec = cc_factor * cc_spec * cc_f_ibl * g.env.x;
 
-    let l = g.light.xyz;
-    let nl = dot(n, l);
-    if nl > 0.0 && g.light.w > 0.0 {
-        let lit = shadow_at(p + n * g.shadow.w, 0, g.light0, 1.0 + g.shadow.z, screen_pos);
-        if lit > 0.0 {
-            let h = normalize(l + v);
-            let nh = max(dot(n, h), 0.0);
-            let a = cc_rough * cc_rough;
-            let a2 = a * a;
-            let d = nh * nh * (a2 - 1.0) + 1.0;
-            let ndf = a2 / (PI * d * d);
-            let k = (cc_rough + 1.0) * (cc_rough + 1.0) * 0.125;
-            let vis = 0.25 / ((nl * (1.0 - k) + k) * (n_v * (1.0 - k) + k));
-            let cc_f = 0.04 + 0.96 * pow(1.0 - max(dot(v, h), 0.0), 5.0);
-            spec += cc_factor * (cc_f * ndf * vis) * nl * g.light.w * lit;
-        }
+    if g.light.w > 0.0 {
+        let shadow_enabled = g.floor.w > 0.5;
+        let lit = select(1.0, shadow_at(p + n * g.shadow.w, 0, g.light0, 1.0 + g.shadow.z, screen_pos), shadow_enabled);
+        spec += clearcoat_direct(g.light.xyz, g.light.w, g.light_color.rgb, n, v, cc_factor, cc_rough, lit);
+    }
+    if g.light2.w > 0.0 {
+        spec += clearcoat_direct(g.light2.xyz, g.light2.w, g.light2_color.rgb, n, v, cc_factor, cc_rough, 1.0);
     }
     return spec;
 }
@@ -586,9 +590,16 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         var total_diffuse = ibl_res.diffuse * ao;
         var total_specular = ibl_res.specular * ao;
         if g.light.w > 0.0 {
-            let dir_res = key_light_pbr(in.world_pos, n, v, albedo, clamp(metallic, 0.0, 1.0), clamp(rough, 0.03, 1.0), in.clip.xy);
+            let shadow_enabled = g.floor.w > 0.5;
+            let lit = select(1.0, shadow_at(in.world_pos + n * g.shadow.w, 0, g.light0, 1.0 + g.shadow.z, in.clip.xy), shadow_enabled);
+            let dir_res = directional_pbr(g.light.xyz, g.light.w, g.light_color.rgb, in.world_pos, n, v, albedo, clamp(metallic, 0.0, 1.0), clamp(rough, 0.03, 1.0), lit);
             total_diffuse += dir_res.diffuse * ao;
             total_specular += dir_res.specular * ao;
+        }
+        if g.light2.w > 0.0 {
+            let dir2_res = directional_pbr(g.light2.xyz, g.light2.w, g.light2_color.rgb, in.world_pos, n, v, albedo, clamp(metallic, 0.0, 1.0), clamp(rough, 0.03, 1.0), 1.0);
+            total_diffuse += dir2_res.diffuse * ao;
+            total_specular += dir2_res.specular * ao;
         }
 
         // Clearcoat specular layer (automotive paint, rims, carbon, lacquer)

@@ -65,6 +65,9 @@ struct GlobalsUniform {
     light0: [[f32; 4]; 4],
     light1: [[f32; 4]; 4],
     light: [f32; 4],
+    light_color: [f32; 4],
+    light2: [f32; 4],
+    light2_color: [f32; 4],
     shadow: [f32; 4],
     floor: [f32; 4],
 }
@@ -1142,7 +1145,7 @@ impl Renderer {
         // Shadows: the key light from the environment's brightest spot (turned with the
         // environment), plus a straight-down view for contact shading on the floor.
         let shadow_frame = input.scene.filter(|_| rendered && !xray && (s.shadows || s.floor_shadow));
-        let key_dir = {
+        let key_dir = if s.light_follow_env {
             let d = self.key_light.get();
             let (sin, cos) = s.env_rotation.to_radians().sin_cos();
             // Never lower than 25 degrees, so shadows stay on the floor near the model.
@@ -1150,6 +1153,27 @@ impl Renderer {
             let flat = Vec3::new(d.x, d.y, 0.0).normalize_or(Vec3::X);
             let elevation = d.z.clamp(-1.0, 1.0).asin().max(25f32.to_radians());
             (flat * elevation.cos() + Vec3::Z * elevation.sin()).normalize()
+        } else {
+            let yaw_rad = s.light_yaw.to_radians();
+            let pitch_rad = s.light_pitch.to_radians().clamp(5f32.to_radians(), 89f32.to_radians());
+            let (sy, cy) = yaw_rad.sin_cos();
+            let (sp, cp) = pitch_rad.sin_cos();
+            Vec3::new(cp * cy, cp * sy, sp).normalize()
+        };
+        let light2_dir = {
+            let yaw_rad = s.light2_yaw.to_radians();
+            let pitch_rad = s.light2_pitch.to_radians().clamp(-80f32.to_radians(), 89f32.to_radians());
+            let (sy, cy) = yaw_rad.sin_cos();
+            let (sp, cp) = pitch_rad.sin_cos();
+            Vec3::new(cp * cy, cp * sy, sp).normalize()
+        };
+        let light_color = {
+            let c = srgb_to_linear(s.light_color);
+            [c[0], c[1], c[2], 1.0]
+        };
+        let light2_color = {
+            let c = srgb_to_linear(s.light2_color);
+            [c[0], c[1], c[2], 1.0]
         };
         let (light0, light1) = match shadow_frame {
             Some(f) => {
@@ -1243,16 +1267,24 @@ impl Renderer {
             },
             light0: light0.to_cols_array_2d(),
             light1: light1.to_cols_array_2d(),
-            light: match shadow_frame {
-                Some(_) if s.shadows => [key_dir.x, key_dir.y, key_dir.z, s.light_strength * s.env_strength * 2.0],
-                _ => [0.0; 4],
+            light: if rendered && s.light_strength > 0.0 {
+                [key_dir.x, key_dir.y, key_dir.z, s.light_strength * s.env_strength * 2.0]
+            } else {
+                [0.0; 4]
             },
+            light_color,
+            light2: if rendered && s.light2_enabled && s.light2_strength > 0.0 {
+                [light2_dir.x, light2_dir.y, light2_dir.z, s.light2_strength * s.env_strength * 2.0]
+            } else {
+                [0.0; 4]
+            },
+            light2_color,
             shadow: match shadow_frame {
                 Some(f) => [s.floor_shadow as u32 as f32, f.floor, 1.0 + s.shadow_softness.clamp(0.0, 1.0) * 5.0, f.radius * 0.004],
                 None => [0.0; 4],
             },
             floor: match shadow_frame {
-                Some(f) => [f.center.x, f.center.y, f.radius * 4.0, 0.0],
+                Some(f) => [f.center.x, f.center.y, f.radius * 4.0, if s.shadows { 1.0 } else { 0.0 }],
                 None => [0.0; 4],
             },
         };
