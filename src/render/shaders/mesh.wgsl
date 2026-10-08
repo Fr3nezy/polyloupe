@@ -39,33 +39,78 @@ struct MaterialU {
 
 const SHADOW_SIZE: f32 = 2048.0;
 
-// How lit `p` is from shadow map `layer` (1 = lit), filtered over a square of taps `radius`
-// texels apart. Outside the map counts as lit.
-fn shadow_at(p: vec3<f32>, layer: i32, m: mat4x4<f32>, radius: f32) -> f32 {
+// Interleaved gradient noise for jittered sampling.
+fn interleaved_gradient_noise(pos: vec2<f32>) -> f32 {
+    let magic = vec3<f32>(0.06711056, 0.00583715, 52.9829189);
+    return fract(magic.z * fract(dot(pos, magic.xy)));
+}
+
+// 32 Vogel disk samples distributed uniformly on the unit disk.
+const VOGEL_SAMPLES = array<vec2<f32>, 32>(
+    vec2<f32>(0.125000, 0.000000),
+    vec2<f32>(-0.159645, 0.146248),
+    vec2<f32>(0.024436, -0.278438),
+    vec2<f32>(0.201222, 0.262459),
+    vec2<f32>(-0.369268, -0.065318),
+    vec2<f32>(0.349802, -0.222516),
+    vec2<f32>(-0.117002, 0.435242),
+    vec2<f32>(-0.223136, -0.429634),
+    vec2<f32>(0.484115, 0.176798),
+    vec2<f32>(-0.503641, 0.207896),
+    vec2<f32>(0.242788, -0.518824),
+    vec2<f32>(0.179414, 0.572001),
+    vec2<f32>(-0.540757, -0.313380),
+    vec2<f32>(0.634370, -0.139464),
+    vec2<f32>(-0.387146, 0.550675),
+    vec2<f32>(-0.089440, -0.690200),
+    vec2<f32>(0.549072, 0.462758),
+    vec2<f32>(-0.738878, 0.030555),
+    vec2<f32>(0.538955, -0.536332),
+    vec2<f32>(-0.036058, 0.779792),
+    vec2<f32>(-0.512818, -0.614527),
+    vec2<f32>(0.812360, 0.109302),
+    vec2<f32>(-0.688311, 0.478909),
+    vec2<f32>(0.188086, -0.836061),
+    vec2<f32>(0.435033, 0.759191),
+    vec2<f32>(-0.850448, -0.271316),
+    vec2<f32>(0.826102, -0.381680),
+    vec2<f32>(-0.357888, 0.855156),
+    vec2<f32>(-0.319407, -0.888034),
+    vec2<f32>(0.849909, 0.446688),
+    vec2<f32>(-0.944035, 0.248845),
+    vec2<f32>(0.536596, -0.834530),
+);
+
+// How lit `p` is from shadow map `layer` (1 = lit), filtered over a Vogel disk of taps `radius`
+// texels apart, rotated per screen pixel with interleaved gradient noise to eliminate banding.
+fn shadow_at(p: vec3<f32>, layer: i32, m: mat4x4<f32>, radius: f32, screen_pos: vec2<f32>) -> f32 {
     let c = m * vec4<f32>(p, 1.0);
     let uv = vec2<f32>(c.x * 0.5 + 0.5, 0.5 - c.y * 0.5);
     if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || c.z > 1.0 {
         return 1.0;
     }
     let texel = radius / SHADOW_SIZE;
+    let phi = interleaved_gradient_noise(screen_pos) * 6.2831853;
+    let cos_phi = cos(phi);
+    let sin_phi = sin(phi);
+
     var sum = 0.0;
-    for (var y = -2; y <= 2; y++) {
-        for (var x = -2; x <= 2; x++) {
-            let o = vec2<f32>(f32(x), f32(y)) * texel;
-            sum += textureSampleCompareLevel(shadow_tex, shadow_samp, uv + o, layer, c.z - 0.0015);
-        }
+    for (var i = 0; i < 32; i++) {
+        let s = VOGEL_SAMPLES[i];
+        let o = vec2<f32>(s.x * cos_phi - s.y * sin_phi, s.x * sin_phi + s.y * cos_phi) * texel;
+        sum += textureSampleCompareLevel(shadow_tex, shadow_samp, uv + o, layer, c.z - 0.0015);
     }
-    return sum / 25.0;
+    return sum / 32.0;
 }
 
 // GGX specular and Lambert diffuse from the key light, shadowed.
-fn key_light(p: vec3<f32>, n: vec3<f32>, v: vec3<f32>, albedo: vec3<f32>, metallic: f32, rough: f32) -> vec3<f32> {
+fn key_light(p: vec3<f32>, n: vec3<f32>, v: vec3<f32>, albedo: vec3<f32>, metallic: f32, rough: f32, screen_pos: vec2<f32>) -> vec3<f32> {
     let l = g.light.xyz;
     let nl = dot(n, l);
     if nl <= 0.0 {
         return vec3<f32>(0.0);
     }
-    let lit = shadow_at(p + n * g.shadow.w, 0, g.light0, 1.0 + g.shadow.z);
+    let lit = shadow_at(p + n * g.shadow.w, 0, g.light0, 1.0 + g.shadow.z, screen_pos);
     if lit <= 0.0 {
         return vec3<f32>(0.0);
     }
@@ -489,7 +534,7 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         }
         color = ibl(n, v, albedo, clamp(metallic, 0.0, 1.0), clamp(rough, 0.03, 1.0)) * ao + emissive;
         if g.light.w > 0.0 {
-            color += key_light(in.world_pos, n, v, albedo, clamp(metallic, 0.0, 1.0), clamp(rough, 0.05, 1.0)) * ao;
+            color += key_light(in.world_pos, n, v, albedo, clamp(metallic, 0.0, 1.0), clamp(rough, 0.05, 1.0), in.clip.xy) * ao;
         }
         color = view_transform(color * g.params.y, g.extra.y);
     } else if cmode == 4u {
@@ -535,6 +580,14 @@ fn vs_full(@builtin(vertex_index) i: u32) -> FullOut {
 
 @fragment
 fn fs_background(in: FullOut) -> @location(0) vec4<f32> {
+    // Transparent preview checkerboard (extra.z == 3u)
+    if g.extra.z == 3u {
+        let check_size = 16.0;
+        let c = floor(in.clip.xy / check_size);
+        let check = (i32(c.x) + i32(c.y)) & 1;
+        let col = select(vec3<f32>(0.13, 0.13, 0.14), vec3<f32>(0.18, 0.18, 0.20), check == 1);
+        return vec4<f32>(srgb_to_linear(col), 1.0);
+    }
     // Studio backdrop: light gray, a little brighter towards the top, like a photo sweep.
     if g.extra.z == 2u {
         let t = clamp(in.ndc.y * 0.5 + 0.5, 0.0, 1.0);
@@ -771,10 +824,10 @@ fn fs_floor(in: FloorOut) -> @location(0) vec4<f32> {
     let fade = 1.0 - smoothstep(0.45, 1.0, r);
     var dark = 0.0;
     if g.light.w > 0.0 && g.light.z > 0.0 {
-        dark += (1.0 - shadow_at(p + vec3<f32>(0.0, 0.0, g.shadow.w), 0, g.light0, 1.5 + g.shadow.z * 1.5)) * 0.55;
+        dark += (1.0 - shadow_at(p + vec3<f32>(0.0, 0.0, g.shadow.w), 0, g.light0, 1.5 + g.shadow.z * 1.5, in.clip.xy)) * 0.55;
     }
     // Contact: how much of the model is right above, blurred wide.
-    let contact = 1.0 - shadow_at(p + vec3<f32>(0.0, 0.0, g.shadow.w), 1, g.light1, 4.0 + g.shadow.z * 2.0);
+    let contact = 1.0 - shadow_at(p + vec3<f32>(0.0, 0.0, g.shadow.w), 1, g.light1, 4.0 + g.shadow.z * 2.0, in.clip.xy + vec2<f32>(13.37, 37.13));
     dark += contact * 0.45;
     return vec4<f32>(0.0, 0.0, 0.0, clamp(dark, 0.0, 0.85) * fade);
 }

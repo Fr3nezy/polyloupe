@@ -337,6 +337,8 @@ pub struct Settings {
     /// Rendered mode: a light studio backdrop (a soft gradient, no grid) instead of the
     /// viewport's dark gray. `env_background` wins over it.
     pub studio_backdrop: bool,
+    /// Rendered mode: transparent background with a viewport checkerboard and alpha export.
+    pub transparent_background: bool,
     pub floor_shadow: bool,
     pub light_strength: f32,
     /// 0 = crisp, 1 = very soft.
@@ -411,6 +413,7 @@ impl Default for Settings {
             grain_size: 1.0,
             shadows: true,
             studio_backdrop: false,
+            transparent_background: false,
             floor_shadow: true,
             light_strength: 1.0,
             shadow_softness: 0.4,

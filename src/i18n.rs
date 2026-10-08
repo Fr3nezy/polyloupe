@@ -641,6 +641,16 @@ fn italian_text(en: &str) -> Option<&'static str> {
             "Moltiplica la dimensione della vista, fino a 4096 px sul lato lungo"
         }
         "Transparent background" => "Sfondo trasparente",
+        "Transparent" => "Trasparente",
+        "Transparent background with checkerboard preview and alpha export" => {
+            "Sfondo trasparente con anteprima a scacchiera ed esportazione alpha"
+        }
+        "Export with alpha transparency (best with GIF)" => {
+            "Esporta con trasparenza alpha (consigliato con GIF)"
+        }
+        "MP4 does not support transparency; export as GIF for transparent alpha." => {
+            "Il formato MP4 non supporta la trasparenza; esporta come GIF per la trasparenza alpha."
+        }
         "Include the floor grid" => "Includi la griglia a pavimento",
         "Close" => "Chiudi",
         _ => return None,

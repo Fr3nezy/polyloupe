@@ -1193,7 +1193,7 @@ impl Renderer {
             extra: [
                 TexturePass::ALL.iter().position(|p| *p == s.texture_pass).unwrap_or(0) as u32,
                 (s.view_transform == ViewTransform::AgX) as u32,
-                if rendered && s.env_background { 1 } else if rendered && s.studio_backdrop { 2 } else { 0 },
+                if rendered && s.transparent_background { 3 } else if rendered && s.env_background { 1 } else if rendered && s.studio_backdrop { 2 } else { 0 },
                 object_outline as u32,
             ],
             params: [
@@ -1357,7 +1357,7 @@ impl Renderer {
             pass.set_bind_group(0, &self.globals_bg, &[]);
 
             // 1. World background or studio backdrop (Rendered).
-            if rendered && (s.env_background || s.studio_backdrop) {
+            if !input.transparent && rendered && (s.env_background || s.studio_backdrop || s.transparent_background) {
                 pass.set_pipeline(&self.pipes.background);
                 pass.draw(0..3, 0..1);
             }
@@ -1387,7 +1387,7 @@ impl Renderer {
 
             // 3. Floor grid, depth-tested against the surfaces, and the shadow floor. The studio
             // backdrop is for clean shots: no grid.
-            if s.show_grid && !(rendered && s.studio_backdrop && !s.env_background) {
+            if !input.transparent && s.show_grid && !(rendered && (s.studio_backdrop || s.transparent_background) && !s.env_background) {
                 pass.set_pipeline(&self.pipes.grid);
                 pass.draw(0..3, 0..1);
             }

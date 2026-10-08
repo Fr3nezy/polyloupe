@@ -561,7 +561,8 @@ impl ViewerApp {
         let [w, h] = self.viewport_px;
         let scale = (self.settings.export_scale.clamp(1, 4) as f32).min(MAX_SIDE / w.max(h).max(1) as f32);
         let size = [(w as f32 * scale).round() as u32, (h as f32 * scale).round() as u32];
-        match self.render_offscreen(size, self.settings.export_transparent) {
+        let transparent = self.settings.export_transparent || self.settings.transparent_background;
+        match self.render_offscreen(size, transparent) {
             Some(([w, h], pixels)) => image::save_buffer(path, &pixels, w, h, image::ColorType::Rgba8)
                 .map_err(|e| trf("Couldn't save the image: {error}", &[("error", &e)])),
             None => Err(tr("Couldn't render the image").to_string()),
@@ -587,6 +588,8 @@ impl ViewerApp {
         settings.show_face_orientation &= settings.show_overlays;
         if transparent {
             settings.env_background = false;
+            settings.studio_backdrop = false;
+            settings.transparent_background = false;
         }
         let (grid_cell, grid_fade, grid_axis) = grid_params(&self.camera);
         // Hide the selection; the next viewport frame sets it again.

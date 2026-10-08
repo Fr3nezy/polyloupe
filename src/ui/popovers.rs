@@ -366,15 +366,33 @@ fn rendered(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails) -> Option<Po
     ui.add(egui::Slider::new(&mut s.env_rotation, -180.0..=180.0).suffix("°").text(tr("Rotation")));
     ui.add(egui::Slider::new(&mut s.env_strength, 0.0..=4.0).text(tr("Strength")));
     widgets::section(ui, "Background");
-    // Three choices over two settings: the world wins over the studio backdrop.
-    let mut backdrop = if s.env_background { 2 } else if s.studio_backdrop { 1 } else { 0 };
+    // Four choices over settings: Viewport, Studio, World, Transparent.
+    let mut backdrop = if s.transparent_background {
+        3
+    } else if s.env_background {
+        2
+    } else if s.studio_backdrop {
+        1
+    } else {
+        0
+    };
     ui.horizontal(|ui| {
-        if widgets::segmented(ui, &mut backdrop, &[(0, "Viewport"), (1, "Studio"), (2, "World")]) {
-            s.env_background = backdrop == 2;
+        if widgets::segmented(
+            ui,
+            &mut backdrop,
+            &[(0, "Viewport"), (1, "Studio"), (2, "World"), (3, "Transparent")],
+        ) {
+            s.transparent_background = backdrop == 3;
             s.studio_backdrop = backdrop == 1;
+            s.env_background = backdrop == 2;
+            if s.transparent_background {
+                s.export_transparent = true;
+            }
         }
     });
-    if s.env_background {
+    if s.transparent_background {
+        ui.label(RichText::new(tr("Transparent background with checkerboard preview and alpha export")).size(11.0).color(theme::TEXT_DIM));
+    } else if s.env_background {
         ui.add(egui::Slider::new(&mut s.env_blur, 0.0..=1.0).text(tr("Blur")));
     } else if s.studio_backdrop {
         ui.label(RichText::new(tr("Light gray sweep without the grid, for product shots")).size(11.0).color(theme::TEXT_DIM));

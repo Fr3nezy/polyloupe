@@ -136,7 +136,10 @@ impl CaptureOptions {
                         .find(|n| format!("{n:?}").eq_ignore_ascii_case(v))
                         .unwrap_or(s.navigation)
                 }
-                "--transparent" => s.export_transparent = true,
+                "--transparent" => {
+                    s.export_transparent = true;
+                    s.transparent_background = true;
+                }
                 "--sidebar" => s.show_sidebar = true,
                 "--no-outline" => s.show_outline = false,
                 "--normals" => s.show_normals = true,
@@ -238,7 +241,10 @@ pub fn parse() -> Result<LaunchOptions, String> {
                 capture.uv = true;
                 capture.uv_material = value("--uv-material")?.parse().ok();
             }
-            "--turntable" => capture.turntable = Some(PathBuf::from(value("--turntable")?)),
+            "--turntable" => {
+                capture.turntable = Some(PathBuf::from(value("--turntable")?));
+                capturing = true;
+            }
             "--section" => {
                 // x|y|z[,position 0..1][,flip]
                 let v = value("--section")?;

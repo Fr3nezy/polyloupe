@@ -37,6 +37,16 @@ impl ViewerApp {
                 ui.add_enabled_ui(self.anim.as_ref().is_some_and(|a| a.has_clips()), |ui| {
                     ui.checkbox(&mut s.turntable_animate, tr("Play the animation during the turn"));
                 });
+                widgets::section(ui, "Background");
+                ui.checkbox(&mut s.export_transparent, tr("Transparent background"))
+                    .on_hover_text(tr("Export with alpha transparency (best with GIF)"));
+                if s.turntable_mp4 && s.export_transparent {
+                    ui.label(
+                        RichText::new(tr("MP4 does not support transparency; export as GIF for transparent alpha."))
+                            .size(11.0)
+                            .color(theme::TEXT_DIM),
+                    );
+                }
                 ui.add_space(6.0);
                 ui.label(RichText::new(tr("Turns once around the model from the current view, with the current shading.")).size(11.0).color(theme::TEXT_DIM));
                 ui.add_space(6.0);
@@ -137,7 +147,8 @@ impl ViewerApp {
                     }
                 }
             }
-            let Some((_, pixels)) = self.render_offscreen(size, false) else {
+            let transparent = self.settings.export_transparent || self.settings.transparent_background;
+            let Some((_, pixels)) = self.render_offscreen(size, transparent) else {
                 error = Some(tr("Couldn't render the image").to_string());
                 break;
             };
