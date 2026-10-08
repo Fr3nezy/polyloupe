@@ -1058,8 +1058,8 @@ impl ViewerApp {
         if self.settings.shading != ShadingMode::Rendered || !self.settings.show_overlays {
             return;
         }
-        let in_render_tab = self.settings.show_sidebar && self.inspector_tab == InspectorTab::Render;
-        if !self.settings.show_light_gizmos && !in_render_tab {
+        // Hidden by default; Overlays > Lights shows them, and adding a light turns them on.
+        if !self.settings.show_light_gizmos {
             return;
         }
         if self.info.is_none() {
@@ -1573,6 +1573,7 @@ impl ViewerApp {
                         if ui.small_button(tr("+ Add Light")).on_hover_text(tr("Add a new custom light source (up to 6)")).clicked() {
                             let idx = s.lights.len() + 1;
                             let yaw = (s.lights.len() as f32 * 60.0 + 35.0).rem_euclid(360.0);
+                            s.show_light_gizmos = true;
                             s.lights.push(crate::settings::CustomLight {
                                 name: format!("Light {idx}"),
                                 enabled: true,

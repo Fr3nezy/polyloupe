@@ -114,6 +114,10 @@ pub fn overlays(ui: &mut Ui, s: &mut Settings) {
                 });
             }
         });
+        ui.add_enabled_ui(s.shading == ShadingMode::Rendered, |ui| {
+            ui.checkbox(&mut s.show_light_gizmos, tr("Lights"))
+                .on_hover_text(tr("Light handles and their line to the model, in Rendered"));
+        });
         ui.checkbox(&mut s.show_origins, tr("Origins"))
             .on_hover_text(tr("Each object's pivot as a dot, like Blender"));
         ui.add_enabled_ui(s.shading == ShadingMode::Solid, |ui| {

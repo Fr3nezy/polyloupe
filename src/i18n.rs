@@ -353,6 +353,8 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Navigation gizmo" => "Gizmo di navigazione",
         "Performance" => "Prestazioni",
         "Graphics" => "Grafica",
+        "Lights" => "Luci",
+        "Light handles and their line to the model, in Rendered" => "Maniglie delle luci e la loro linea verso il modello, in Renderizzato",
         "Quality" => "Qualità",
         "Performance: for integrated GPUs and older PCs. No anti-aliasing, the view at 100% scale on high-DPI screens, lighter shadows. Exported images keep full quality" => "Prestazioni: per GPU integrate e PC datati. Niente anti-aliasing, vista al 100% sugli schermi ad alta densità, ombre più leggere. Le immagini esportate restano alla massima qualità",
         "Off: frames aren't capped to the monitor refresh rate" => {

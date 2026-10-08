@@ -452,6 +452,9 @@ pub struct Settings {
 
     /// Multi-light list and viewport gizmo toggle.
     pub lights: Vec<CustomLight>,
+    /// Light handles in the viewport (Overlays > Lights). Saved under a new key: builds that
+    /// showed them by default saved `true`, and they now start hidden.
+    #[serde(rename = "light_handles")]
     pub show_light_gizmos: bool,
 
     /// Dedicated Render tab resolution and quality options.
@@ -568,7 +571,7 @@ impl Default for Settings {
                     color: [215, 230, 255],
                 },
             ],
-            show_light_gizmos: true,
+            show_light_gizmos: false,
             render_resolution: RenderResolution::Viewport,
             render_custom_w: 1920,
             render_custom_h: 1080,

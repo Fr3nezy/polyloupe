@@ -32,7 +32,8 @@ soft shadows, better glass and car paint, and a Performance mode for low-end PCs
   2× and 4× supersampling, transparent background, a framing guide, and the turntable export.
   F12 renders and saves the image.
 - **Lights**: a key light that follows the HDRI or goes where you put it, plus up to 5 more, each
-  with color (temperature presets), intensity and direction. Drag their handles in the viewport.
+  with color (temperature presets), intensity and direction. Drag their handles in the viewport:
+  Overlays > Lights shows them, and adding a light turns them on.
 - **Soft shadows** on the model and on a shadow floor, with a softness slider, and a studio
   backdrop.
 - **Glass and car paint**: transmission, clearcoat and better reflections.
@@ -53,7 +54,7 @@ soft shadows, better glass and car paint, and a Performance mode for low-end PCs
 - **Update check**: once a day PolyLoupe asks GitHub whether a newer release exists and shows a
   banner with a Download button. Preferences > Check for updates turns it off. Nothing is
   downloaded or installed by the app.
-- The overlays switch (Shift Alt Z) also hides light handles and the split view guides.
+- The overlays switch (Shift Alt Z) also hides the split view guides.
 - Measure: Delete removes only the last measurement. Models whose buffers exceed 256 MB open.
 
 ## Notes
