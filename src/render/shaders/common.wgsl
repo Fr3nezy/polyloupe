@@ -1,4 +1,9 @@
-// Shared declarations, prepended to every viewport shader.
+struct LightData {
+    // xyz: unit direction towards the light, w: intensity
+    dir: vec4<f32>,
+    // rgb: linear color, w: 1.0 if enabled else 0.0
+    color: vec4<f32>,
+};
 
 struct Globals {
     view_proj: mat4x4<f32>,
@@ -44,14 +49,8 @@ struct Globals {
     // Shadow maps: the key light's and a straight-down one (contact shading on the floor).
     light0: mat4x4<f32>,
     light1: mat4x4<f32>,
-    // Key light: xyz unit direction towards the light, w intensity (0 = no key light).
-    light: vec4<f32>,
-    // Key light color: linear RGB, w unused.
-    light_color: vec4<f32>,
-    // Secondary / Fill light: xyz unit direction, w intensity (0 = off).
-    light2: vec4<f32>,
-    // Secondary / Fill light color: linear RGB, w unused.
-    light2_color: vec4<f32>,
+    // Multi-light array (light 0 casts shadows, lights 1..5 are fill/rim/accent lights).
+    lights: array<LightData, 6>,
     // x 1 to draw the shadow floor, y floor height, z softness (shadow map texels),
     // w normal offset against shadow acne (world units).
     shadow: vec4<f32>,

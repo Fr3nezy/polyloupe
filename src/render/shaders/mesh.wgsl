@@ -320,13 +320,16 @@ fn clearcoat_pbr(n: vec3<f32>, v: vec3<f32>, p: vec3<f32>, screen_pos: vec2<f32>
     let cc_f_ibl = 0.04 + 0.96 * pow(1.0 - n_v, 5.0);
     var spec = cc_factor * cc_spec * cc_f_ibl * g.env.x;
 
-    if g.light.w > 0.0 {
-        let shadow_enabled = g.floor.w > 0.5;
-        let lit = select(1.0, shadow_at(p + n * g.shadow.w, 0, g.light0, 1.0 + g.shadow.z, screen_pos), shadow_enabled);
-        spec += clearcoat_direct(g.light.xyz, g.light.w, g.light_color.rgb, n, v, cc_factor, cc_rough, lit);
-    }
-    if g.light2.w > 0.0 {
-        spec += clearcoat_direct(g.light2.xyz, g.light2.w, g.light2_color.rgb, n, v, cc_factor, cc_rough, 1.0);
+    let shadow_enabled = g.floor.w > 0.5;
+    for (var i = 0u; i < 6u; i++) {
+        let l = g.lights[i];
+        if l.color.w > 0.5 && l.dir.w > 0.0 {
+            var lit = 1.0;
+            if i == 0u {
+                lit = select(1.0, shadow_at(p + n * g.shadow.w, 0, g.light0, 1.0 + g.shadow.z, screen_pos), shadow_enabled);
+            }
+            spec += clearcoat_direct(l.dir.xyz, l.dir.w, l.color.rgb, n, v, cc_factor, cc_rough, lit);
+        }
     }
     return spec;
 }
@@ -589,17 +592,18 @@ fn fs_mesh(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         let ibl_res = ibl_pbr(n, v, albedo, clamp(metallic, 0.0, 1.0), clamp(rough, 0.02, 1.0));
         var total_diffuse = ibl_res.diffuse * ao;
         var total_specular = ibl_res.specular * ao;
-        if g.light.w > 0.0 {
-            let shadow_enabled = g.floor.w > 0.5;
-            let lit = select(1.0, shadow_at(in.world_pos + n * g.shadow.w, 0, g.light0, 1.0 + g.shadow.z, in.clip.xy), shadow_enabled);
-            let dir_res = directional_pbr(g.light.xyz, g.light.w, g.light_color.rgb, in.world_pos, n, v, albedo, clamp(metallic, 0.0, 1.0), clamp(rough, 0.03, 1.0), lit);
-            total_diffuse += dir_res.diffuse * ao;
-            total_specular += dir_res.specular * ao;
-        }
-        if g.light2.w > 0.0 {
-            let dir2_res = directional_pbr(g.light2.xyz, g.light2.w, g.light2_color.rgb, in.world_pos, n, v, albedo, clamp(metallic, 0.0, 1.0), clamp(rough, 0.03, 1.0), 1.0);
-            total_diffuse += dir2_res.diffuse * ao;
-            total_specular += dir2_res.specular * ao;
+        let shadow_enabled = g.floor.w > 0.5;
+        for (var i = 0u; i < 6u; i++) {
+            let l = g.lights[i];
+            if l.color.w > 0.5 && l.dir.w > 0.0 {
+                var lit = 1.0;
+                if i == 0u {
+                    lit = select(1.0, shadow_at(in.world_pos + n * g.shadow.w, 0, g.light0, 1.0 + g.shadow.z, in.clip.xy), shadow_enabled);
+                }
+                let dir_res = directional_pbr(l.dir.xyz, l.dir.w, l.color.rgb, in.world_pos, n, v, albedo, clamp(metallic, 0.0, 1.0), clamp(rough, 0.03, 1.0), lit);
+                total_diffuse += dir_res.diffuse * ao;
+                total_specular += dir_res.specular * ao;
+            }
         }
 
         // Clearcoat specular layer (automotive paint, rims, carbon, lacquer)
@@ -722,11 +726,11 @@ fn fs_wire(in: WireOut) -> @location(0) vec4<f32> {
         discard;
     }
     var rgb = g.wire_color.rgb;
-    // In wireframe mode the random color mode tints wires per object, like Blender.
-    if g.shading.x == 0u && g.shading.w == 2u {
+    // In wireframe mode with random color mode OR wire overlay with random color mode:
+    if (g.shading.x == 0u && g.shading.w == 2u) || g.wire_color.w > 0.5 {
         rgb = obj.color.rgb;
     }
-    var a = g.wire_color.a * g.params.z;
+    var a = g.params.z;
     if has(ACTIVE) {
         rgb = g.active_color.rgb;
         a = 1.0;
@@ -915,7 +919,7 @@ fn fs_floor(in: FloorOut) -> @location(0) vec4<f32> {
     let r = length(p.xy - g.floor.xy) / g.floor.z;
     let fade = 1.0 - smoothstep(0.45, 1.0, r);
     var dark = 0.0;
-    if g.light.w > 0.0 && g.light.z > 0.0 {
+    if g.lights[0].dir.w > 0.0 && g.lights[0].dir.z > 0.0 && g.lights[0].color.w > 0.5 {
         dark += (1.0 - shadow_at(p + vec3<f32>(0.0, 0.0, g.shadow.w), 0, g.light0, 1.5 + g.shadow.z * 1.5, in.clip.xy)) * 0.55;
     }
     // Contact: how much of the model is right above, blurred wide.

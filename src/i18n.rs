@@ -714,6 +714,31 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Viewport (1×)" => "Viewport (1×)",
         "Viewport (2×)" => "Viewport (2×)",
         "Quality (SSAA)" => "Qualità (SSAA)",
+        "Solid + Wire" => "Solido + Wire",
+        "Split view: compare two shading styles on this model" => {
+            "Vista divisa: confronta due stili di visualizzazione su questo modello"
+        }
+        "Gradient" => "Gradiente",
+        "Show light gizmos in viewport" => "Mostra gizmo luci nel viewport",
+        "Display interactive light handles in the 3D viewport (Photo Mode)" => {
+            "Mostra manipolatori luce interattivi nel viewport 3D (Modalità Foto)"
+        }
+        "Studio Lights" => "Luci studio",
+        "+ Add Light" => "+ Aggiungi luce",
+        "Add a new custom light source (up to 6)" => "Aggiunge una nuova sorgente di luce personalizzata (fino a 6)",
+        "Key Light" => "Luce principale",
+        "Fill Light" => "Luce di riempimento",
+        "Remove this light" => "Rimuovi questa luce",
+        "Presets:" => "Preset:",
+        "Compare Shading Styles…" => "Confronta stili di visualizzazione…",
+        "Bounding box" => "Bounding box",
+        "Show model dimensions and bounding box axes" => "Mostra le dimensioni del modello e gli assi del bounding box",
+        "Color picker" => "Selettore colore",
+        "Opacity" => "Opacità",
+        "Style B: Wireframe" => "Stile B: Wireframe",
+        "Style B: Solid + Wireframe" => "Stile B: Solido + Wireframe",
+        "Style B: Solid" => "Stile B: Solido",
+        "Style B: Rendered" => "Stile B: Rendered",
         _ => return None,
     })
 }

@@ -3,11 +3,10 @@
 //! shading, overlays and section. The Info tab gets an A/B table (triangles, vertices, mesh
 //! check...). Tools (select, measure, section drag) work on model A.
 
-use eframe::egui::{CursorIcon, Id, Vec2};
+use eframe::egui::{CursorIcon, Id};
 
 use super::*;
 use crate::i18n::thousands;
-use crate::ui::widgets::text_button;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum CompareMode {
@@ -23,8 +22,15 @@ pub(super) struct Compare {
     pub(super) mode: CompareMode,
     /// Divider position across the view in Split mode, 0..1.
     pub(super) split: f32,
+    /// Soft transition / gradient width across the divider in Split mode.
+    pub(super) gradient: f32,
     /// B's own animation, kept at A's clip and time.
     pub(super) anim: Option<AnimPlayer>,
+    /// Comparing different shading styles on the same model.
+    pub(super) is_same_model: bool,
+    pub(super) style_b: ShadingMode,
+    pub(super) wire_overlay_b: bool,
+    pub(super) matcap_b: usize,
 }
 
 impl ViewerApp {
@@ -36,6 +42,12 @@ impl ViewerApp {
         if let Some(path) = picked {
             self.open_compare(path, ctx);
         }
+    }
+
+    /// Opens style comparison on the current model.
+    pub(super) fn open_compare_same_model(&mut self, ctx: &egui::Context) {
+        let Some(info) = &self.info else { return };
+        self.open_compare(info.path.clone(), ctx);
     }
 
     /// Loads `path` as model B.
@@ -84,8 +96,11 @@ impl ViewerApp {
         let has_morphs = scene.meshes.iter().any(|m| !m.rig.morph_targets.is_empty());
         let animation = std::mem::take(&mut scene.animation);
         let anim = (animation.is_animated() || has_morphs).then(|| AnimPlayer::new(animation, &scene.meshes));
-        self.anim_dirty = true;
-        let (mode, split) = self.compare.as_ref().map_or((CompareMode::SideBySide, 0.5), |c| (c.mode, c.split));
+        let is_same_model = self.info.as_ref().is_some_and(|i| i.path == loading.path);
+        let (mode, split, gradient) = self.compare.as_ref().map_or(
+            if is_same_model { (CompareMode::Split, 0.5, 0.08) } else { (CompareMode::SideBySide, 0.5, 0.0) },
+            |c| (c.mode, c.split, c.gradient),
+        );
         // Frame both models: same camera, and clip planes that fit the bigger one.
         let mut both = self.scene_bounds();
         for o in &info.objects {
@@ -93,7 +108,19 @@ impl ViewerApp {
         }
         self.camera.scene_radius = self.camera.scene_radius.max(both.radius());
         self.camera.frame(&both, true);
-        self.compare = Some(Compare { renderer, info, qa_rx: Some(spawn_analysis(scene, ctx)), mode, split, anim });
+        self.compare = Some(Compare {
+            renderer,
+            info,
+            qa_rx: Some(spawn_analysis(scene, ctx)),
+            mode,
+            split,
+            gradient,
+            anim,
+            is_same_model,
+            style_b: ShadingMode::Wireframe,
+            wire_overlay_b: true,
+            matcap_b: 0,
+        });
     }
 
     /// Poses B like A: same clip (matched by name, else by index) at the same time.
@@ -131,8 +158,16 @@ impl ViewerApp {
         let normal_length = self.normal_length();
         let (grid_cell, grid_fade, grid_axis) = grid_params(&self.camera);
         let print_scale = self.print_scale();
-        let scene = None;
         let (Some(c), Some(rs)) = (&mut self.compare, frame.wgpu_render_state()) else { return };
+        let mut settings_b = effective.clone();
+        if c.is_same_model {
+            settings_b.shading = c.style_b;
+            settings_b.show_wire_overlay = c.wire_overlay_b;
+            if c.style_b == ShadingMode::Solid {
+                settings_b.matcap = c.matcap_b;
+            }
+        }
+        let scene = None;
         let target = match c.mode {
             CompareMode::SideBySide => Rect::from_min_max(pos2((rect.center().x + 1.0).round(), rect.min.y), rect.max),
             CompareMode::Split => rect,
@@ -148,7 +183,7 @@ impl ViewerApp {
             grid_cell,
             grid_fade,
             grid_axis,
-            settings: &effective,
+            settings: &settings_b,
             pick: None,
             transparent: false,
             section,
@@ -165,21 +200,72 @@ impl ViewerApp {
         match c.mode {
             CompareMode::SideBySide => {
                 painter.image(texture, target, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
-                painter.vline(rect.center().x, rect.y_range(), Stroke::new(2.0, theme::BG_APP));
+                painter.vline(rect.center().x, rect.y_range(), Stroke::new(4.0, Color32::from_black_alpha(160)));
+                painter.vline(rect.center().x, rect.y_range(), Stroke::new(1.5, theme::BORDER));
             }
             CompareMode::Split => {
                 let x = rect.left() + rect.width() * c.split;
-                let part = Rect::from_min_max(pos2(x, rect.top()), rect.max);
-                painter.image(texture, part, Rect::from_min_max(pos2(c.split, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                if c.gradient <= 0.001 {
+                    let part = Rect::from_min_max(pos2(x, rect.top()), rect.max);
+                    painter.image(texture, part, Rect::from_min_max(pos2(c.split, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                } else {
+                    let g = c.gradient.clamp(0.005, 0.45);
+                    let t_min = (c.split - g).clamp(0.0, 1.0);
+                    let t_max = (c.split + g).clamp(0.0, 1.0);
+                    let x_min = rect.left() + rect.width() * t_min;
+                    let x_max = rect.left() + rect.width() * t_max;
+
+                    // Transition band with gradient alpha
+                    if x_max > x_min {
+                        let mut mesh = egui::Mesh::with_texture(texture);
+                        let y0 = rect.top();
+                        let y1 = rect.bottom();
+                        let c_left = Color32::from_white_alpha(0);
+                        let c_right = Color32::WHITE;
+                        mesh.vertices.push(egui::epaint::Vertex { pos: pos2(x_min, y0), uv: pos2(t_min, 0.0), color: c_left });
+                        mesh.vertices.push(egui::epaint::Vertex { pos: pos2(x_max, y0), uv: pos2(t_max, 0.0), color: c_right });
+                        mesh.vertices.push(egui::epaint::Vertex { pos: pos2(x_max, y1), uv: pos2(t_max, 1.0), color: c_right });
+                        mesh.vertices.push(egui::epaint::Vertex { pos: pos2(x_min, y1), uv: pos2(t_min, 1.0), color: c_left });
+                        mesh.indices.extend([0, 1, 2, 0, 2, 3]);
+                        painter.add(egui::Shape::mesh(mesh));
+                    }
+
+                    // Fully opaque part to the right of x_max
+                    if rect.right() > x_max {
+                        let right_rect = Rect::from_min_max(pos2(x_max, rect.top()), rect.max);
+                        painter.image(texture, right_rect, Rect::from_min_max(pos2(t_max, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                    }
+                }
             }
         }
     }
 
     /// Name chips for A and B, and the Split divider handle.
     pub(super) fn compare_controls(&mut self, ui: &mut Ui, rect: Rect) {
-        let Some(c) = &self.compare else { return };
-        let a_name = self.info.as_ref().map(|i| (i.file_name.clone(), i.triangles)).unwrap_or_default();
-        let b_name = (c.info.file_name.clone(), c.info.triangles);
+        let Some(c) = &mut self.compare else { return };
+        let a_name = if c.is_same_model {
+            let label = match self.settings.shading {
+                ShadingMode::Wireframe => tr("Wireframe"),
+                ShadingMode::Solid => tr("Solid"),
+                ShadingMode::Rendered => tr("Rendered"),
+            };
+            let tris = self.info.as_ref().map(|i| i.triangles).unwrap_or(0);
+            (format!("A: {}", label), tris)
+        } else {
+            self.info.as_ref().map(|i| (i.file_name.clone(), i.triangles)).unwrap_or_default()
+        };
+        let b_name = if c.is_same_model {
+            let label = match (c.style_b, c.wire_overlay_b) {
+                (ShadingMode::Wireframe, _) => tr("Wireframe"),
+                (ShadingMode::Solid, true) => tr("Solid + Wire"),
+                (ShadingMode::Solid, false) => tr("Solid"),
+                (ShadingMode::Rendered, _) => tr("Rendered"),
+            };
+            let tris = self.info.as_ref().map(|i| i.triangles).unwrap_or(0);
+            (format!("B: {}", label), tris)
+        } else {
+            (c.info.file_name.clone(), c.info.triangles)
+        };
         let bottom = rect.bottom() - if self.section.is_some() { 64.0 } else { 16.0 };
         let (mode, split) = (c.mode, c.split);
         match mode {
@@ -201,12 +287,18 @@ impl ViewerApp {
                 if r.dragged() {
                     if let Some(p) = r.interact_pointer_pos() {
                         let t = ((p.x - rect.left()) / rect.width()).clamp(0.02, 0.98);
-                        if let Some(c) = &mut self.compare {
-                            c.split = t;
-                        }
+                        c.split = t;
                     }
                 }
                 let painter = ui.painter();
+                if c.gradient > 0.001 {
+                    let g = c.gradient.clamp(0.005, 0.45);
+                    let x_min = rect.left() + rect.width() * (c.split - g).clamp(0.0, 1.0);
+                    let x_max = rect.left() + rect.width() * (c.split + g).clamp(0.0, 1.0);
+                    let stroke_fade = Stroke::new(1.0, Color32::from_white_alpha(50));
+                    painter.extend(egui::Shape::dashed_line(&[pos2(x_min, rect.top()), pos2(x_min, rect.bottom())], stroke_fade, 4.0, 4.0));
+                    painter.extend(egui::Shape::dashed_line(&[pos2(x_max, rect.top()), pos2(x_max, rect.bottom())], stroke_fade, 4.0, 4.0));
+                }
                 painter.vline(x, rect.y_range(), Stroke::new(3.0, Color32::from_black_alpha(140)));
                 painter.vline(x, rect.y_range(), Stroke::new(1.5, theme::TEXT));
                 let knob = pos2(x, rect.center().y);
@@ -224,43 +316,13 @@ impl ViewerApp {
         }
     }
 
-    /// Compare group in the viewport toolbar: start one, or switch layout / swap / close.
-    pub(super) fn compare_toolbar(&mut self, ui: &mut Ui) -> CompareAction {
-        let Some(c) = &self.compare else {
-            let r = widgets::sized_icon_button(ui, icons::compare_side, self.compare_loading.is_some(), Vec2::splat(theme::TOOLBAR_HEIGHT))
-                .on_hover_text(tr("Compare with another model (Ctrl Shift O), or drop it on the right half"));
-            return if r.clicked() { CompareAction::Open } else { CompareAction::None };
-        };
-        let mut action = CompareAction::None;
-        let mode = c.mode;
-        if widgets::sized_icon_button(ui, icons::compare_side, mode == CompareMode::SideBySide, Vec2::splat(theme::TOOLBAR_HEIGHT))
-            .on_hover_text(tr("A/B side by side"))
-            .clicked()
-        {
-            action = CompareAction::Mode(CompareMode::SideBySide);
-        }
-        if widgets::sized_icon_button(ui, icons::compare_split, mode == CompareMode::Split, Vec2::splat(theme::TOOLBAR_HEIGHT))
-            .on_hover_text(tr("A/B split: drag the divider"))
-            .clicked()
-        {
-            action = CompareAction::Mode(CompareMode::Split);
-        }
-        if text_button(ui, "A⇄B", false).on_hover_text(tr("Swap A and B")).clicked() {
-            action = CompareAction::Swap;
-        }
-        if widgets::sized_icon_button(ui, icons::close, false, Vec2::splat(theme::TOOLBAR_HEIGHT))
-            .on_hover_text(tr("Close the comparison"))
-            .clicked()
-        {
-            action = CompareAction::Close;
-        }
-        action
-    }
+
 
     pub(super) fn apply_compare_action(&mut self, action: CompareAction, ctx: &egui::Context) {
         match action {
             CompareAction::None => {}
             CompareAction::Open => self.compare_dialog(ctx),
+            CompareAction::OpenSameModel => self.open_compare_same_model(ctx),
             CompareAction::Mode(m) => {
                 if let Some(c) = &mut self.compare {
                     c.mode = m;
@@ -350,6 +412,7 @@ impl ViewerApp {
 pub(super) enum CompareAction {
     None,
     Open,
+    OpenSameModel,
     Mode(CompareMode),
     Swap,
     Close,

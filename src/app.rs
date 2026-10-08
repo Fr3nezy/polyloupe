@@ -354,6 +354,7 @@ impl ViewerApp {
             .storage
             .and_then(|s| eframe::get_value(s, eframe::APP_KEY))
             .unwrap_or_default();
+        settings.ensure_lights();
         // Every session starts from the default environment; picking another is a per-session look.
         settings.environment = settings.default_environment.clone();
         if let Some(c) = &launch.capture {
@@ -1599,6 +1600,8 @@ impl ViewerApp {
             self.draw_origins(ui, rect_a);
             self.draw_transform_gizmo(ui, rect_a);
             self.draw_render_framing_guide(ui, rect_a);
+            self.draw_bounds_overlay(ui, rect_a);
+            self.draw_lights_overlay(ui, rect_a);
 
             let overlays = self.settings.show_overlays;
             if overlays {
@@ -1644,6 +1647,7 @@ impl ViewerApp {
         if !effective.show_overlays {
             effective.show_grid = false;
             effective.show_wire_overlay = false;
+            effective.show_bounds_overlay = false;
             effective.show_outline = false;
             effective.show_non_manifold = false;
             effective.show_open_edges = false;
@@ -2008,7 +2012,7 @@ impl eframe::App for ViewerApp {
             egui::Panel::right("inspector")
                 .resizable(true)
                 .default_size(shell::INSPECTOR_WIDTH)
-                .size_range(280.0..=480.0)
+                .size_range(340.0..=520.0)
                 .frame(Frame::new().fill(theme::PANEL))
                 .show(ui, |ui| self.inspector(ui));
         }

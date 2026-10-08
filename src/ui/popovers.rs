@@ -90,8 +90,29 @@ pub fn overlays(ui: &mut Ui, s: &mut Settings) {
         });
         ui.checkbox(&mut s.show_stats, tr("Statistics"));
         ui.checkbox(&mut s.show_gizmo, tr("Navigation gizmo"));
+        ui.checkbox(&mut s.show_bounds_overlay, tr("Bounding box"))
+            .on_hover_text(tr("Show model dimensions and bounding box axes"));
         ui.add_enabled_ui(s.shading != ShadingMode::Wireframe, |ui| {
             ui.checkbox(&mut s.show_wire_overlay, tr("Wireframe"));
+            if s.show_wire_overlay {
+                ui.indent("wire_opts", |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(tr("Color")).size(11.0).color(theme::TEXT_DIM));
+                        widgets::segmented(ui, &mut s.wire_color_mode, &[
+                            (crate::settings::WireColorMode::Theme, "Theme"),
+                            (crate::settings::WireColorMode::Random, "Random"),
+                            (crate::settings::WireColorMode::Custom, "Custom"),
+                        ]);
+                    });
+                    if s.wire_color_mode == crate::settings::WireColorMode::Custom {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(tr("Color picker")).size(11.0).color(theme::TEXT_DIM));
+                            ui.color_edit_button_srgb(&mut s.wire_color);
+                        });
+                    }
+                    ui.add(egui::Slider::new(&mut s.wire_opacity, 0.1..=1.0).text(tr("Opacity")));
+                });
+            }
         });
         ui.checkbox(&mut s.show_origins, tr("Origins"))
             .on_hover_text(tr("Each object's pivot as a dot, like Blender"));

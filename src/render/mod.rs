@@ -40,6 +40,13 @@ const FLAG_SKINNED: u32 = 32;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
+struct LightDataUniform {
+    dir: [f32; 4],
+    color: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 struct GlobalsUniform {
     view_proj: [[f32; 4]; 4],
     inv_view_proj: [[f32; 4]; 4],
@@ -64,10 +71,7 @@ struct GlobalsUniform {
     surface: [f32; 4],
     light0: [[f32; 4]; 4],
     light1: [[f32; 4]; 4],
-    light: [f32; 4],
-    light_color: [f32; 4],
-    light2: [f32; 4],
-    light2_color: [f32; 4],
+    lights: [LightDataUniform; 6],
     shadow: [f32; 4],
     floor: [f32; 4],
 }
@@ -617,6 +621,10 @@ impl Renderer {
         self.key_light.set(brightest_direction(env));
     }
 
+    pub fn key_light(&self) -> Vec3 {
+        self.key_light.get()
+    }
+
     /// Whether every mesh buffer fits this GPU's largest buffer: wgpu treats an oversized buffer
     /// as a fatal error, so a model too big for the GPU must be refused before uploading.
     pub fn check_fits(&self, scene: &Scene) -> Result<(), String> {
@@ -1145,35 +1153,51 @@ impl Renderer {
         // Shadows: the key light from the environment's brightest spot (turned with the
         // environment), plus a straight-down view for contact shading on the floor.
         let shadow_frame = input.scene.filter(|_| rendered && !xray && (s.shadows || s.floor_shadow));
-        let key_dir = if s.light_follow_env {
-            let d = self.key_light.get();
-            let (sin, cos) = s.env_rotation.to_radians().sin_cos();
-            // Never lower than 25 degrees, so shadows stay on the floor near the model.
-            let d = Vec3::new(cos * d.x - sin * d.y, sin * d.x + cos * d.y, d.z);
-            let flat = Vec3::new(d.x, d.y, 0.0).normalize_or(Vec3::X);
-            let elevation = d.z.clamp(-1.0, 1.0).asin().max(25f32.to_radians());
-            (flat * elevation.cos() + Vec3::Z * elevation.sin()).normalize()
+        let mut uniform_lights = [LightDataUniform { dir: [0.0; 4], color: [0.0; 4] }; 6];
+        let key_dir = if let Some(l) = s.lights.first() {
+            if l.follow_env {
+                let d = self.key_light.get();
+                let (sin, cos) = s.env_rotation.to_radians().sin_cos();
+                let d = Vec3::new(cos * d.x - sin * d.y, sin * d.x + cos * d.y, d.z);
+                let flat = Vec3::new(d.x, d.y, 0.0).normalize_or(Vec3::X);
+                let elevation = d.z.clamp(-1.0, 1.0).asin().max(25f32.to_radians());
+                (flat * elevation.cos() + Vec3::Z * elevation.sin()).normalize()
+            } else {
+                let yaw_rad = l.yaw.to_radians();
+                let pitch_rad = l.pitch.to_radians().clamp(5f32.to_radians(), 89f32.to_radians());
+                let (sy, cy) = yaw_rad.sin_cos();
+                let (sp, cp) = pitch_rad.sin_cos();
+                Vec3::new(cp * cy, cp * sy, sp).normalize()
+            }
         } else {
-            let yaw_rad = s.light_yaw.to_radians();
-            let pitch_rad = s.light_pitch.to_radians().clamp(5f32.to_radians(), 89f32.to_radians());
-            let (sy, cy) = yaw_rad.sin_cos();
-            let (sp, cp) = pitch_rad.sin_cos();
-            Vec3::new(cp * cy, cp * sy, sp).normalize()
+            Vec3::new(0.5, 0.5, 0.7).normalize()
         };
-        let light2_dir = {
-            let yaw_rad = s.light2_yaw.to_radians();
-            let pitch_rad = s.light2_pitch.to_radians().clamp(-80f32.to_radians(), 89f32.to_radians());
-            let (sy, cy) = yaw_rad.sin_cos();
-            let (sp, cp) = pitch_rad.sin_cos();
-            Vec3::new(cp * cy, cp * sy, sp).normalize()
-        };
-        let light_color = {
-            let c = srgb_to_linear(s.light_color);
-            [c[0], c[1], c[2], 1.0]
-        };
-        let light2_color = {
-            let c = srgb_to_linear(s.light2_color);
-            [c[0], c[1], c[2], 1.0]
+
+        if rendered {
+            if let Some(l) = s.lights.first() {
+                if l.enabled && l.strength > 0.0 {
+                    let c = srgb_to_linear(l.color);
+                    uniform_lights[0] = LightDataUniform {
+                        dir: [key_dir.x, key_dir.y, key_dir.z, l.strength * s.env_strength * 2.0],
+                        color: [c[0], c[1], c[2], 1.0],
+                    };
+                }
+            }
+
+            for (idx, l) in s.lights.iter().skip(1).take(5).enumerate() {
+                if l.enabled && l.strength > 0.0 {
+                    let yaw_rad = l.yaw.to_radians();
+                    let pitch_rad = l.pitch.to_radians().clamp(-89f32.to_radians(), 89f32.to_radians());
+                    let (sy, cy) = yaw_rad.sin_cos();
+                    let (sp, cp) = pitch_rad.sin_cos();
+                    let dir = Vec3::new(cp * cy, cp * sy, sp).normalize();
+                    let c = srgb_to_linear(l.color);
+                    uniform_lights[idx + 1] = LightDataUniform {
+                        dir: [dir.x, dir.y, dir.z, l.strength * s.env_strength * 2.0],
+                        color: [c[0], c[1], c[2], 1.0],
+                    };
+                }
+            }
         };
         let (light0, light1) = match shadow_frame {
             Some(f) => {
@@ -1225,7 +1249,7 @@ impl Renderer {
             params: [
                 if xray { s.xray_alpha.clamp(0.05, 1.0) } else { 1.0 },
                 s.exposure,
-                if wire_mode { if xray { 0.75 } else { 1.0 } } else { 0.35 },
+                if wire_mode { if xray { 0.75 } else { 1.0 } } else { s.wire_opacity.clamp(0.05, 1.0) },
                 s.env_rotation.to_radians(),
             ],
             env: [s.env_strength, s.env_blur, (ibl::SPEC_MIPS - 1) as f32, 0.0],
@@ -1235,7 +1259,19 @@ impl Renderer {
                 input.grid_axis as f32,
                 if s.show_axes { 1.0 } else { 0.0 },
             ],
-            wire_color: if wire_mode { [0.62, 0.62, 0.62, 1.0] } else { [0.0, 0.0, 0.0, 1.0] },
+            wire_color: {
+                let wire_random = (wire_mode && s.color == ColorMode::Random)
+                    || (!wire_mode && s.show_wire_overlay && s.wire_color_mode == crate::settings::WireColorMode::Random);
+                let wire_rgb = if !wire_mode && s.wire_color_mode == crate::settings::WireColorMode::Custom {
+                    let c = srgb_to_linear(s.wire_color);
+                    [c[0], c[1], c[2]]
+                } else if wire_mode {
+                    [0.62, 0.62, 0.62]
+                } else {
+                    [0.05, 0.05, 0.05]
+                };
+                [wire_rgb[0], wire_rgb[1], wire_rgb[2], if wire_random { 1.0 } else { 0.0 }]
+            },
             selected_color: SELECTED,
             active_color: ACTIVE,
             viewport: [size[0] as f32, size[1] as f32, 1.0 / size[0] as f32, 1.0 / size[1] as f32],
@@ -1267,18 +1303,7 @@ impl Renderer {
             },
             light0: light0.to_cols_array_2d(),
             light1: light1.to_cols_array_2d(),
-            light: if rendered && s.light_strength > 0.0 {
-                [key_dir.x, key_dir.y, key_dir.z, s.light_strength * s.env_strength * 2.0]
-            } else {
-                [0.0; 4]
-            },
-            light_color,
-            light2: if rendered && s.light2_enabled && s.light2_strength > 0.0 {
-                [light2_dir.x, light2_dir.y, light2_dir.z, s.light2_strength * s.env_strength * 2.0]
-            } else {
-                [0.0; 4]
-            },
-            light2_color,
+            lights: uniform_lights,
             shadow: match shadow_frame {
                 Some(f) => [s.floor_shadow as u32 as f32, f.floor, 1.0 + s.shadow_softness.clamp(0.0, 1.0) * 5.0, f.radius * 0.004],
                 None => [0.0; 4],

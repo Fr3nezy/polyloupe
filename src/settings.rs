@@ -32,6 +32,38 @@ pub enum ColorMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WireColorMode {
+    Theme,
+    Random,
+    Custom,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CustomLight {
+    pub name: String,
+    pub enabled: bool,
+    pub follow_env: bool,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub strength: f32,
+    pub color: [u8; 3],
+}
+
+impl Default for CustomLight {
+    fn default() -> Self {
+        Self {
+            name: "Light".to_string(),
+            enabled: true,
+            follow_env: false,
+            yaw: 45.0,
+            pitch: 55.0,
+            strength: 1.0,
+            color: [255, 255, 255],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TexturePass {
     BaseColor,
     Roughness,
@@ -331,7 +363,11 @@ pub struct Settings {
     pub show_overlays: bool,
     pub show_grid: bool,
     pub show_axes: bool,
+    pub show_bounds_overlay: bool,
     pub show_wire_overlay: bool,
+    pub wire_color_mode: WireColorMode,
+    pub wire_color: [u8; 3],
+    pub wire_opacity: f32,
     /// Mesh analysis overlays (see `qa`).
     pub show_non_manifold: bool,
     pub show_open_edges: bool,
@@ -411,6 +447,10 @@ pub struct Settings {
     pub light2_strength: f32,
     pub light2_color: [u8; 3],
 
+    /// Multi-light list and viewport gizmo toggle.
+    pub lights: Vec<CustomLight>,
+    pub show_light_gizmos: bool,
+
     /// Dedicated Render tab resolution and quality options.
     pub render_resolution: RenderResolution,
     pub render_custom_w: u32,
@@ -449,7 +489,11 @@ impl Default for Settings {
             show_overlays: true,
             show_grid: true,
             show_axes: true,
+            show_bounds_overlay: true,
             show_wire_overlay: false,
+            wire_color_mode: WireColorMode::Theme,
+            wire_color: [40, 40, 40],
+            wire_opacity: 0.75,
             show_non_manifold: false,
             show_open_edges: false,
             show_overlapping: false,
@@ -500,6 +544,27 @@ impl Default for Settings {
             light2_pitch: 35.0,
             light2_strength: 0.6,
             light2_color: [215, 230, 255],
+            lights: vec![
+                CustomLight {
+                    name: "Key Light".to_string(),
+                    enabled: true,
+                    follow_env: true,
+                    yaw: 45.0,
+                    pitch: 55.0,
+                    strength: 1.0,
+                    color: [255, 255, 255],
+                },
+                CustomLight {
+                    name: "Fill Light".to_string(),
+                    enabled: false,
+                    follow_env: false,
+                    yaw: 225.0,
+                    pitch: 35.0,
+                    strength: 0.6,
+                    color: [215, 230, 255],
+                },
+            ],
+            show_light_gizmos: true,
             render_resolution: RenderResolution::Viewport,
             render_custom_w: 1920,
             render_custom_h: 1080,
@@ -510,6 +575,30 @@ impl Default for Settings {
 }
 
 impl Settings {
+    pub fn ensure_lights(&mut self) {
+        if self.lights.is_empty() {
+            self.lights = vec![
+                CustomLight {
+                    name: "Key Light".to_string(),
+                    enabled: true,
+                    follow_env: self.light_follow_env,
+                    yaw: self.light_yaw,
+                    pitch: self.light_pitch,
+                    strength: self.light_strength,
+                    color: self.light_color,
+                },
+                CustomLight {
+                    name: "Fill Light".to_string(),
+                    enabled: self.light2_enabled,
+                    follow_env: false,
+                    yaw: self.light2_yaw,
+                    pitch: self.light2_pitch,
+                    strength: self.light2_strength,
+                    color: self.light2_color,
+                },
+            ];
+        }
+    }
     pub fn xray(&self) -> bool {
         match self.shading {
             ShadingMode::Wireframe => self.xray_wire,
