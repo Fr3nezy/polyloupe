@@ -9,12 +9,13 @@ use eframe::egui::{
 
 use super::*;
 use crate::i18n::thousands;
+use crate::settings::RenderResolution;
 use crate::ui::widgets::{dashed_rect, primary_button, stat_card, table, tag, text_button, tool_button, toolbar, toolbar_separator};
 
 pub(super) const TITLE_HEIGHT: f32 = 44.0;
 pub(super) const FOOTER_HEIGHT: f32 = 32.0;
 pub(super) const RAIL_WIDTH: f32 = 52.0;
-pub(super) const INSPECTOR_WIDTH: f32 = 320.0;
+pub(super) const INSPECTOR_WIDTH: f32 = 360.0;
 const RESIZE_MARGIN: f32 = 5.0;
 
 /// Left-drag behavior chosen in the tool rail (the navigation preset's own mouse keys always work).
@@ -28,12 +29,24 @@ pub(super) enum Tool {
     Measure,
     /// Drag to slide the section plane.
     Section,
+    /// Gizmos to move, rotate and scale objects (Manufacturing), with lay on face and export.
+    Move,
+    Rotate,
+    Scale,
+}
+
+impl Tool {
+    /// One of the gizmo tools.
+    pub(super) fn transforms(self) -> bool {
+        matches!(self, Tool::Move | Tool::Rotate | Tool::Scale)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum InspectorTab {
     Info,
     Shading,
+    Render,
     Materials,
     Scene,
 }
@@ -43,6 +56,8 @@ pub(super) enum InspectorTab {
 pub(super) enum ToastAction {
     /// Opens the inspector on the Materials tab (missing textures).
     ShowMaterials,
+    /// Opens the releases page (a newer version exists).
+    OpenReleases,
 }
 
 impl ViewerApp {
@@ -106,6 +121,14 @@ impl ViewerApp {
                 }
                 if window_button(ui, icons::window_minimize, size, false).clicked() {
                     ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
+                }
+                // Side panel switch, always in the same place at the right edge.
+                ui.add_space(10.0);
+                let open = self.settings.show_sidebar;
+                let panel = widgets::sized_icon_button(ui, icons::panel, open, vec2(36.0, 30.0))
+                    .on_hover_text(tr(if open { "Hide the side panel (N)" } else { "Show the side panel (N)" }));
+                if panel.clicked() {
+                    self.settings.show_sidebar = !open;
                 }
             });
         });
@@ -185,6 +208,12 @@ impl ViewerApp {
                     if ui.button(tr("Export Turntable…")).clicked() {
                         ui.close();
                         self.show_turntable = true;
+                    }
+                    if self.manufacturing()
+                        && ui.button(tr("Export Model…")).on_hover_text(tr("Save the model as STL or 3MF, with the Move tool's changes")).clicked()
+                    {
+                        ui.close();
+                        self.export_model_dialog(&ctx);
                     }
                 });
                 ui.separator();
@@ -324,18 +353,39 @@ impl ViewerApp {
         ui.vertical_centered(|ui| {
             ui.add_space(8.0);
             ui.spacing_mut().item_spacing.y = 4.0;
-            for (tool, icon, tip) in [
-                (Tool::Select, icons::cursor as icons::IconFn, "Select (Q)"),
-                (Tool::Orbit, icons::orbit, "Orbit (O)"),
-                (Tool::Pan, icons::move_arrows, "Pan (G)"),
-                (Tool::Zoom, icons::magnifier, "Zoom (drag up/down)"),
+            // Two groups, like Blender's toolbar and its navigation controls: what the left button
+            // does to the model, then camera moves.
+            let tools: [(Tool, icons::IconFn, &str); 6] = [
+                (Tool::Select, icons::cursor, "Select (Q)"),
+                (Tool::Move, icons::move_arrows, "Move (W)"),
+                (Tool::Rotate, icons::rotate, "Rotate (E)"),
+                (Tool::Scale, icons::scale, "Scale (R)"),
                 (Tool::Measure, icons::ruler, "Measure (M)"),
                 (Tool::Section, icons::section, "Section"),
-            ] {
-                if tool_button(ui, icon, self.tool == tool).on_hover_text(tr(tip)).clicked() {
-                    self.tool = tool;
-                    if tool == Tool::Section && self.section.is_none() {
-                        self.section = Some(Section::default());
+            ];
+            let navigation: [(Tool, icons::IconFn, &str); 3] = [
+                (Tool::Orbit, icons::orbit, "Orbit (O)"),
+                (Tool::Pan, icons::hand, "Pan (G)"),
+                (Tool::Zoom, icons::magnifier, "Zoom (drag up/down)"),
+            ];
+            for (group, items) in [("Tools", &tools[..]), ("View", &navigation[..])] {
+                if group == "View" {
+                    ui.add_space(6.0);
+                    let (line, _) = ui.allocate_exact_size(vec2(28.0, 1.0), Sense::hover());
+                    ui.painter().hline(line.x_range(), line.center().y, Stroke::new(1.0, theme::BORDER));
+                    ui.add_space(6.0);
+                }
+                let (caption, _) = ui.allocate_exact_size(vec2(RAIL_WIDTH - 8.0, 14.0), Sense::hover());
+                ui.painter().text(caption.center(), Align2::CENTER_CENTER, tr(group).to_uppercase(), theme::mono(8.5), theme::TEXT_FAINT);
+                for &(tool, icon, tip) in items {
+                    if tool.transforms() && !self.manufacturing() {
+                        continue;
+                    }
+                    if tool_button(ui, icon, self.tool == tool).on_hover_text(tr(tip)).clicked() {
+                        self.tool = tool;
+                        if tool == Tool::Section && self.section.is_none() {
+                            self.section = Some(Section::default());
+                        }
                     }
                 }
             }
@@ -344,15 +394,157 @@ impl ViewerApp {
 
     // --- Viewport toolbar and HUD ----------------------------------------------------------------
 
+    /// Dedicated comparison headers: separates Window A and Window B cleanly into their own floating toolbars.
+    pub(super) fn compare_toolbars(&mut self, ctx: &egui::Context, viewport: Rect) {
+        let mut compare_action = super::compare::CompareAction::None;
+        let Some(c) = &mut self.compare else { return };
+        let mode = c.mode;
+        let is_same = c.is_same_model;
+        let top = viewport.top() + 12.0;
+
+        // A over the left half, B over the right one, the mode bar in the middle. Each side bar
+        // is pushed in from the viewport edge and out from the middle bar (last frame's widths),
+        // so the three never overlap however narrow the view gets.
+        let width = |id: &str| ctx.memory(|m| m.area_rect(Id::new(id))).map_or(0.0, |r| r.width());
+        let (w_a, w_center, w_b) = (width("compare_bar_a"), width("compare_bar_center"), width("compare_bar_b"));
+        let gap = 8.0;
+        let mid = viewport.center().x;
+        let place = |w: f32, wanted: f32, lo: f32, hi: f32| {
+            let half = w * 0.5;
+            if hi - lo < w { (lo + hi) * 0.5 } else { wanted.clamp(lo + half, hi - half) }
+        };
+        let x_a = place(w_a, (viewport.left() + mid) * 0.5, viewport.left() + gap, mid - w_center * 0.5 - gap);
+        let x_b = place(w_b, (mid + viewport.right()) * 0.5, mid + w_center * 0.5 + gap, viewport.right() - gap);
+        let (pos_a, pos_center, pos_b) = (pos2(x_a, top), pos2(mid, top), pos2(x_b, top));
+
+        // 1. Toolbar A (Window A)
+        let s = &mut self.settings;
+        egui::Area::new(Id::new("compare_bar_a"))
+            .order(Order::Middle)
+            .fixed_pos(pos_a)
+            .pivot(Align2::CENTER_TOP)
+            .show(ctx, |ui| {
+                toolbar(ui, |ui| {
+                    let (badge_r, _) = ui.allocate_exact_size(vec2(22.0, 20.0), Sense::hover());
+                    ui.painter().rect_filled(badge_r, CornerRadius::same(3), theme::ACCENT);
+                    ui.painter().text(badge_r.center(), Align2::CENTER_CENTER, "A", theme::bold(12.0), theme::ON_ACCENT);
+
+                    toolbar_separator(ui);
+
+                    for (m, icon, tip) in [
+                        (ShadingMode::Wireframe, icons::wireframe as icons::IconFn, "Wireframe (Shift Z)"),
+                        (ShadingMode::Solid, icons::solid, "Solid"),
+                        (ShadingMode::Rendered, icons::rendered, "Rendered"),
+                    ] {
+                        if widgets::sized_icon_button(ui, icon, s.shading == m, Vec2::splat(theme::TOOLBAR_HEIGHT - 4.0))
+                            .on_hover_text(tr(tip))
+                            .clicked()
+                        {
+                            s.shading = m;
+                        }
+                    }
+
+                    toolbar_separator(ui);
+                    let r = widgets::sized_icon_button(ui, icons::overlays, s.show_overlays, Vec2::splat(theme::TOOLBAR_HEIGHT - 4.0))
+                        .on_hover_text(tr("Show overlays (Shift Alt Z)"));
+                    if r.clicked() {
+                        s.show_overlays = !s.show_overlays;
+                    }
+                });
+            });
+
+        // 2. Center Toolbar (Mode, Gradient, Close)
+        egui::Area::new(Id::new("compare_bar_center"))
+            .order(Order::Middle)
+            .fixed_pos(pos_center)
+            .pivot(Align2::CENTER_TOP)
+            .show(ctx, |ui| {
+                toolbar(ui, |ui| {
+                    if widgets::sized_icon_button(ui, icons::compare_side, mode == super::compare::CompareMode::SideBySide, Vec2::splat(theme::TOOLBAR_HEIGHT))
+                        .on_hover_text(tr("A/B side by side"))
+                        .clicked()
+                    {
+                        compare_action = super::compare::CompareAction::Mode(super::compare::CompareMode::SideBySide);
+                    }
+                    if widgets::sized_icon_button(ui, icons::compare_split, mode == super::compare::CompareMode::Split, Vec2::splat(theme::TOOLBAR_HEIGHT))
+                        .on_hover_text(tr("A/B split: drag the divider"))
+                        .clicked()
+                    {
+                        compare_action = super::compare::CompareAction::Mode(super::compare::CompareMode::Split);
+                    }
+
+                    if mode == super::compare::CompareMode::Split {
+                        toolbar_separator(ui);
+                        ui.label(theme::caps(tr("Gradient"), 10.0, theme::TEXT_DIM));
+                        ui.spacing_mut().slider_width = 90.0;
+                        ui.add(egui::Slider::new(&mut c.gradient, 0.0..=0.35).show_value(false))
+                            .on_hover_text(tr("Gradient"));
+                    }
+
+                    toolbar_separator(ui);
+                    if widgets::sized_icon_button(ui, icons::close, false, Vec2::splat(theme::TOOLBAR_HEIGHT))
+                        .on_hover_text(tr("Close the comparison"))
+                        .clicked()
+                    {
+                        compare_action = super::compare::CompareAction::Close;
+                    }
+                });
+            });
+
+        // 3. Toolbar B (Window B)
+        egui::Area::new(Id::new("compare_bar_b"))
+            .order(Order::Middle)
+            .fixed_pos(pos_b)
+            .pivot(Align2::CENTER_TOP)
+            .show(ctx, |ui| {
+                toolbar(ui, |ui| {
+                    let (badge_r, _) = ui.allocate_exact_size(vec2(22.0, 20.0), Sense::hover());
+                    ui.painter().rect_filled(badge_r, CornerRadius::same(3), theme::TEXT);
+                    ui.painter().text(badge_r.center(), Align2::CENTER_CENTER, "B", theme::bold(12.0), theme::BG_APP);
+
+                    toolbar_separator(ui);
+
+                    if is_same {
+                        let cur_style = c.style_b;
+                        let cur_wire = c.wire_overlay_b;
+                        for (sb, wb, icon, tip) in [
+                            (ShadingMode::Wireframe, false, icons::wireframe as icons::IconFn, "Style B: Wireframe"),
+                            (ShadingMode::Solid, true, icons::sliders, "Style B: Solid + Wireframe"),
+                            (ShadingMode::Solid, false, icons::solid, "Style B: Solid"),
+                            (ShadingMode::Rendered, false, icons::rendered, "Style B: Rendered"),
+                        ] {
+                            let active = cur_style == sb && cur_wire == wb;
+                            if widgets::sized_icon_button(ui, icon, active, Vec2::splat(theme::TOOLBAR_HEIGHT - 4.0))
+                                .on_hover_text(tr(tip))
+                                .clicked()
+                            {
+                                c.style_b = sb;
+                                c.wire_overlay_b = wb;
+                            }
+                        }
+                    } else {
+                        if text_button(ui, "A⇄B", false).on_hover_text(tr("Swap A and B")).clicked() {
+                            compare_action = super::compare::CompareAction::Swap;
+                        }
+                    }
+                });
+            });
+
+        self.toolbar_rect = Rect::from_min_size(pos2(viewport.left(), top), vec2(viewport.width(), theme::TOOLBAR_HEIGHT + 8.0));
+        self.apply_compare_action(compare_action, ctx);
+    }
+
     /// Shading spheres, overlays, X-ray, texture channel, projection, frame and inspector toggles.
     pub(super) fn viewport_toolbar(&mut self, ctx: &egui::Context, viewport: Rect) {
+        if self.compare.is_some() {
+            self.compare_toolbars(ctx, viewport);
+            return;
+        }
+
         let capture_popover = self.capture.as_ref().and_then(|c| c.opts.popover.clone());
         let mut frame = false;
         let mut shading_panel = false;
         let mut compare_action = super::compare::CompareAction::None;
-        // Always top center; the other overlays make room for it (see `overlay_top`). Only when
-        // the viewport is narrower than the toolbar does it slide, so it never covers the tool
-        // strip on the left.
         let half = self.toolbar_rect.width() * 0.5;
         let mut pos = pos2(viewport.center().x, viewport.top() + 12.0);
         pos.x = pos.x.min(viewport.right() - half - 8.0).max(viewport.left() + half + 8.0);
@@ -362,10 +554,21 @@ impl ViewerApp {
             .pivot(Align2::CENTER_TOP)
             .show(ctx, |ui| {
                 toolbar(ui, |ui| {
+                    // Workspace first: it decides which tools and materials the rest offers.
+                    let mut workspace = self.workspace;
+                    let options = [
+                        (Workspace::Manufacturing, icons::manufacturing as icons::IconFn, Workspace::Manufacturing.label()),
+                        (Workspace::Art, icons::art as icons::IconFn, Workspace::Art.label()),
+                    ];
+                    let tip = tr("Workspace\nManufacturing: CAD and 3D printing, millimeters, plain plastic material\n3D Art: textures, UVs, animation, the file's own materials");
+                    let switched = ui.scope(|ui| widgets::segmented_icons(ui, &mut workspace, &options, viewport.width() > 1000.0));
+                    switched.response.on_hover_text(tip);
+                    if switched.inner {
+                        self.set_workspace(workspace);
+                    }
+                    toolbar_separator(ui);
                     let panel_open = self.settings.show_sidebar && self.inspector_tab == InspectorTab::Shading;
                     let s = &mut self.settings;
-                    // The three modes and their settings button share one pill, so the button
-                    // reads as "settings of this group", not of the sphere next to it.
                     Frame::new()
                         .fill(theme::BG_APP)
                         .stroke(Stroke::new(1.0, theme::BORDER))
@@ -415,7 +618,7 @@ impl ViewerApp {
                         s.toggle_xray();
                     }
 
-                    let missing = self.info.as_ref().map_or(0, |i| i.missing.len());
+                    let missing = self.info.as_ref().map_or(0, |i| i.missing.len()).saturating_mul(!self.manufacturing() as usize);
                     if missing > 0 {
                         toolbar_separator(ui);
                         let r = tag(ui, &format!("{missing} !"), true)
@@ -428,10 +631,21 @@ impl ViewerApp {
                     }
                     if self.info.is_some() {
                         toolbar_separator(ui);
-                        if text_button(ui, "UV", self.uv_view.open).on_hover_text(tr("UV layout (U)")).clicked() {
+                        if !self.manufacturing() && text_button(ui, "UV", self.uv_view.open).on_hover_text(tr("UV layout (U)")).clicked() {
                             self.uv_view.open = !self.uv_view.open;
                         }
-                        compare_action = self.compare_toolbar(ui);
+                        if widgets::sized_icon_button(ui, icons::compare_split, false, Vec2::splat(theme::TOOLBAR_HEIGHT))
+                            .on_hover_text(tr("Split view: compare two shading styles on this model"))
+                            .clicked()
+                        {
+                            compare_action = super::compare::CompareAction::OpenSameModel;
+                        }
+                        if widgets::sized_icon_button(ui, icons::compare_side, self.compare_loading.is_some(), Vec2::splat(theme::TOOLBAR_HEIGHT))
+                            .on_hover_text(tr("Compare with another model (Ctrl Shift O), or drop it on the right half"))
+                            .clicked()
+                        {
+                            compare_action = super::compare::CompareAction::Open;
+                        }
                     }
                     toolbar_separator(ui);
                     let projection = if self.camera.ortho { "Orthographic" } else { "Perspective" };
@@ -444,15 +658,9 @@ impl ViewerApp {
                     {
                         frame = true;
                     }
-                    let r = widgets::sized_icon_button(ui, icons::panel, self.settings.show_sidebar, Vec2::splat(theme::TOOLBAR_HEIGHT))
-                        .on_hover_text(tr("Inspector (N)"));
-                    if r.clicked() {
-                        self.settings.show_sidebar = !self.settings.show_sidebar;
-                    }
                 });
             });
         if area.response.rect != self.toolbar_rect {
-            // The overlays drawn before it this frame used the old rect.
             self.toolbar_rect = area.response.rect;
             ctx.request_repaint();
         }
@@ -714,6 +922,262 @@ impl ViewerApp {
         }
     }
 
+    /// Darkens areas outside the target render aspect ratio (passepartout) when the Render tab is open.
+    pub(super) fn draw_render_framing_guide(&self, ui: &Ui, viewport: Rect) {
+        if !self.settings.show_sidebar
+            || self.inspector_tab != InspectorTab::Render
+            || !self.settings.render_framing_guide
+        {
+            return;
+        }
+        let [target_w, target_h] = self.export_resolution_px();
+        if target_w == 0 || target_h == 0 {
+            return;
+        }
+        let target_aspect = target_w as f32 / target_h as f32;
+        let vp_aspect = viewport.width() / viewport.height().max(1.0);
+
+        if (target_aspect - vp_aspect).abs() < 0.005 {
+            return;
+        }
+
+        let painter = ui.painter().with_clip_rect(viewport);
+        let mask_color = Color32::from_black_alpha(150);
+        let border_stroke = Stroke::new(1.5, Color32::from_white_alpha(160));
+
+        if target_aspect < vp_aspect {
+            let frame_w = viewport.height() * target_aspect;
+            let x0 = viewport.center().x - frame_w * 0.5;
+            let x1 = viewport.center().x + frame_w * 0.5;
+
+            let left_rect = Rect::from_min_max(viewport.min, pos2(x0, viewport.max.y));
+            let right_rect = Rect::from_min_max(pos2(x1, viewport.min.y), viewport.max);
+            let frame_rect = Rect::from_min_max(pos2(x0, viewport.min.y), pos2(x1, viewport.max.y));
+
+            painter.rect_filled(left_rect, CornerRadius::ZERO, mask_color);
+            painter.rect_filled(right_rect, CornerRadius::ZERO, mask_color);
+            painter.rect_stroke(frame_rect, CornerRadius::ZERO, border_stroke, StrokeKind::Inside);
+        } else {
+            let frame_h = viewport.width() / target_aspect;
+            let y0 = viewport.center().y - frame_h * 0.5;
+            let y1 = viewport.center().y + frame_h * 0.5;
+
+            if y0 >= viewport.min.y && y1 <= viewport.max.y {
+                let top_rect = Rect::from_min_max(viewport.min, pos2(viewport.max.x, y0));
+                let bottom_rect = Rect::from_min_max(pos2(viewport.min.x, y1), viewport.max);
+                let frame_rect = Rect::from_min_max(pos2(viewport.min.x, y0), pos2(viewport.max.x, y1));
+
+                painter.rect_filled(top_rect, CornerRadius::ZERO, mask_color);
+                painter.rect_filled(bottom_rect, CornerRadius::ZERO, mask_color);
+                painter.rect_stroke(frame_rect, CornerRadius::ZERO, border_stroke, StrokeKind::Inside);
+            }
+        }
+    }
+
+    /// Bounding box cage and X, Y, Z extent dimensions (dashed lines with colored axis labels).
+    pub(super) fn draw_bounds_overlay(&self, ui: &Ui, viewport: Rect) {
+        if !self.settings.show_overlays || !self.settings.show_bounds_overlay {
+            return;
+        }
+        if self.info.is_none() {
+            return;
+        }
+        let b = self.visible_bounds(false);
+        if !b.is_valid() {
+            return;
+        }
+        let aspect = viewport.width() / viewport.height().max(1.0);
+        let view_proj = self.camera.projection(aspect) * self.camera.view_matrix();
+        let project = |p: Vec3| {
+            let c = view_proj * p.extend(1.0);
+            (c.w > 1e-6).then(|| {
+                let n = c.truncate() / c.w;
+                pos2(viewport.left() + (n.x * 0.5 + 0.5) * viewport.width(), viewport.top() + (0.5 - n.y * 0.5) * viewport.height())
+            })
+        };
+        let painter = ui.painter().with_clip_rect(viewport);
+        let (min, max) = (b.min, b.max);
+        let size = b.size();
+
+        // 8 corners
+        let c000 = min;
+        let c100 = Vec3::new(max.x, min.y, min.z);
+        let c010 = Vec3::new(min.x, max.y, min.z);
+        let c110 = Vec3::new(max.x, max.y, min.z);
+        let c001 = Vec3::new(min.x, min.y, max.z);
+        let c101 = Vec3::new(max.x, min.y, max.z);
+        let c011 = Vec3::new(min.x, max.y, max.z);
+        let c111 = max;
+
+        // Faint cage for the 12 edges
+        let edges = [
+            (c000, c100), (c010, c110), (c001, c101), (c011, c111),
+            (c000, c010), (c100, c110), (c001, c011), (c101, c111),
+            (c000, c001), (c100, c101), (c010, c011), (c110, c111),
+        ];
+
+        let cage_stroke = Stroke::new(1.0, Color32::from_black_alpha(100));
+        for (p0, p1) in edges {
+            if let (Some(s0), Some(s1)) = (project(p0), project(p1)) {
+                painter.extend(egui::Shape::dashed_line(&[s0, s1], cage_stroke, 4.0, 4.0));
+            }
+        }
+
+        // Main 3 dimension axes from the lowest corner with distinct axis colors
+        let up = self.settings.up_axis;
+        let axis_segments = [
+            (0, c000, c100, size.x), // X
+            (1, c000, c010, size.y), // Y
+            (2, c000, c001, size.z), // Z
+        ];
+
+        for (axis_idx, p0, p1, len) in axis_segments {
+            if len < 1e-5 {
+                continue;
+            }
+            let (Some(s0), Some(s1)) = (project(p0), project(p1)) else { continue };
+            let color = crate::axes::color(up.display(axis_idx).0);
+            let stroke = Stroke::new(1.8, color);
+            painter.extend(egui::Shape::dashed_line(&[s0, s1], stroke, 6.0, 4.0));
+
+            // Dimension label badge along the edge
+            let mid = pos2((s0.x + s1.x) * 0.5, (s0.y + s1.y) * 0.5);
+            let axis_name = crate::axes::NAMES[up.display(axis_idx).0];
+            let label = format!("{axis_name} {}", fmt_len(len));
+            let galley = painter.layout_job(theme::caps(&label, 11.0, theme::TEXT));
+            let chip = Rect::from_center_size(mid, galley.size() + vec2(14.0, 8.0));
+            painter.rect_filled(chip, CornerRadius::same(theme::RADIUS), Color32::from_black_alpha(215));
+            painter.rect_stroke(chip, CornerRadius::same(theme::RADIUS), Stroke::new(1.0, color.gamma_multiply(0.8)), StrokeKind::Inside);
+            painter.galley(chip.min + vec2(7.0, 4.0), galley, theme::TEXT);
+        }
+    }
+
+    /// Viewport light locators / gizmos in photo mode style: visible position, color, draggable in 3D view.
+    pub(super) fn draw_lights_overlay(&mut self, ui: &mut Ui, viewport: Rect) {
+        // The overlays switch hides them too, even while the Render tab is open.
+        if self.settings.shading != ShadingMode::Rendered || !self.settings.show_overlays {
+            return;
+        }
+        // Hidden by default; Overlays > Lights shows them, and adding a light turns them on.
+        if !self.settings.show_light_gizmos {
+            return;
+        }
+        if self.info.is_none() {
+            return;
+        }
+        let b = self.visible_bounds(false);
+        let center = if b.is_valid() { b.center() } else { Vec3::ZERO };
+        let radius = if b.is_valid() { b.radius().max(0.5) } else { 2.0 };
+        let aspect = viewport.width() / viewport.height().max(1.0);
+        let view_proj = self.camera.projection(aspect) * self.camera.view_matrix();
+        let project = |p: Vec3| {
+            let c = view_proj * p.extend(1.0);
+            (c.w > 1e-6).then(|| {
+                let n = c.truncate() / c.w;
+                pos2(viewport.left() + (n.x * 0.5 + 0.5) * viewport.width(), viewport.top() + (0.5 - n.y * 0.5) * viewport.height())
+            })
+        };
+        let painter = ui.painter().with_clip_rect(viewport);
+        let center_pt = project(center);
+
+        let orbit = radius * 1.5;
+        let mut drag = None;
+
+        for (i, light) in self.settings.lights.iter().enumerate() {
+            if !light.enabled {
+                continue;
+            }
+            let dir = if i == 0 && light.follow_env {
+                let d = self.renderer.as_ref().map(|r| r.key_light()).unwrap_or(Vec3::new(0.5, 0.5, 0.7));
+                let (sin, cos) = self.settings.env_rotation.to_radians().sin_cos();
+                let d = Vec3::new(cos * d.x - sin * d.y, sin * d.x + cos * d.y, d.z);
+                let flat = Vec3::new(d.x, d.y, 0.0).normalize_or(Vec3::X);
+                let elevation = d.z.clamp(-1.0, 1.0).asin().max(25f32.to_radians());
+                (flat * elevation.cos() + Vec3::Z * elevation.sin()).normalize()
+            } else {
+                // Same range the renderer lights with: the key light never goes below 5°.
+                let (lo, hi) = light_pitch_range(i);
+                let yaw_rad = light.yaw.to_radians();
+                let pitch_rad = light.pitch.clamp(lo, hi).to_radians();
+                let (sy, cy) = yaw_rad.sin_cos();
+                let (sp, cp) = pitch_rad.sin_cos();
+                Vec3::new(cp * cy, cp * sy, sp).normalize()
+            };
+            let world_pos = center + dir * orbit;
+            let Some(screen_pos) = project(world_pos) else { continue };
+
+            // Ray pointing towards center
+            if let Some(cp) = center_pt {
+                let ray_stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(light.color[0], light.color[1], light.color[2], 90));
+                painter.extend(egui::Shape::dashed_line(&[screen_pos, cp], ray_stroke, 4.0, 4.0));
+            }
+
+            // Interactive light handle
+            let handle_id = Id::new(("light_gizmo", i));
+            let handle_rect = Rect::from_center_size(screen_pos, Vec2::splat(26.0));
+            let r = ui.interact(handle_rect, handle_id, Sense::drag());
+            if r.hovered() || r.dragged() {
+                ui.ctx().set_cursor_icon(if r.dragged() { CursorIcon::Grabbing } else { CursorIcon::Grab });
+            }
+            if r.dragged() && r.drag_delta() != Vec2::ZERO {
+                ui.ctx().request_repaint();
+                drag = Some((i, screen_pos + r.drag_delta(), world_pos));
+            }
+
+            let light_color = Color32::from_rgb(light.color[0], light.color[1], light.color[2]);
+            // Glow ring
+            let ring_r = if r.hovered() || r.dragged() { 13.0 } else { 10.0 };
+            painter.circle_filled(screen_pos, ring_r + 2.0, Color32::from_black_alpha(180));
+            painter.circle_stroke(screen_pos, ring_r, Stroke::new(2.0, light_color));
+            painter.circle_filled(screen_pos, ring_r * 0.55, light_color);
+
+            // Light label chip
+            let label = if light.name.is_empty() { format!("L{}", i + 1) } else { light.name.clone() };
+            let galley = painter.layout_job(theme::caps(&label, 10.0, theme::TEXT));
+            let chip = Rect::from_min_size(screen_pos + vec2(14.0, -8.0), galley.size() + vec2(8.0, 4.0));
+            painter.rect_filled(chip, CornerRadius::same(2), Color32::from_black_alpha(200));
+            painter.galley(chip.min + vec2(4.0, 2.0), galley, theme::TEXT);
+        }
+
+        // The handle follows the cursor on the sphere the lights sit on: cast the pointer's ray,
+        // take the hit nearest to where the light was (so it stays on the side it's on), or the
+        // sphere's rim when the ray misses it. Screen motion maps to the same visual motion from
+        // any camera angle.
+        let Some((idx, target, previous)) = drag else { return };
+        let inv = view_proj.inverse();
+        let ndc = vec2(
+            (target.x - viewport.left()) / viewport.width() * 2.0 - 1.0,
+            1.0 - (target.y - viewport.top()) / viewport.height() * 2.0,
+        );
+        // Reverse-Z: depth 1 is the near plane.
+        let near = inv.project_point3(Vec3::new(ndc.x, ndc.y, 1.0));
+        let far = inv.project_point3(Vec3::new(ndc.x, ndc.y, 0.5));
+        let ray = (far - near).normalize_or_zero();
+        if ray == Vec3::ZERO {
+            return;
+        }
+        let oc = near - center;
+        let b = oc.dot(ray);
+        let disc = b * b - (oc.length_squared() - orbit * orbit);
+        let hit = if disc >= 0.0 {
+            let root = disc.sqrt();
+            let (p1, p2) = (near + ray * (-b - root), near + ray * (-b + root));
+            if p1.distance_squared(previous) <= p2.distance_squared(previous) { p1 } else { p2 }
+        } else {
+            near + ray * -b
+        };
+        let d = (hit - center).normalize_or_zero();
+        if d == Vec3::ZERO {
+            return;
+        }
+        if let Some(light) = self.settings.lights.get_mut(idx) {
+            let (lo, hi) = light_pitch_range(idx);
+            light.follow_env = false;
+            light.yaw = d.y.atan2(d.x).to_degrees().rem_euclid(360.0);
+            light.pitch = d.z.clamp(-1.0, 1.0).asin().to_degrees().clamp(lo, hi);
+        }
+    }
+
     /// Outline of the section plane across the scene bounds.
     pub(super) fn draw_section(&self, ui: &Ui, viewport: Rect) {
         let (Some(s), Some(plane)) = (self.section, self.section_plane()) else { return };
@@ -867,37 +1331,80 @@ impl ViewerApp {
     pub(super) fn inspector(&mut self, ui: &mut Ui) {
         // Tabs.
         ui.add_space(8.0);
+        let mut tabs = vec![
+            (InspectorTab::Info, "Info"),
+            (InspectorTab::Shading, "Shading"),
+            (InspectorTab::Render, "Render"),
+        ];
+        if !self.manufacturing() {
+            tabs.push((InspectorTab::Materials, "Materials"));
+        }
+        tabs.push((InspectorTab::Scene, "Scene"));
+
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            ui.spacing_mut().item_spacing.x = 4.0;
-            let tabs = [
-                (InspectorTab::Info, "Info"),
-                (InspectorTab::Shading, "Shading"),
-                (InspectorTab::Materials, "Materials"),
-                (InspectorTab::Scene, "Scene"),
-            ];
-            let width = ((ui.available_width() - 8.0 - 8.0 - 4.0 * (tabs.len() - 1) as f32) / tabs.len() as f32).floor();
-            for (tab, label) in tabs {
-                let selected = self.inspector_tab == tab;
-                let (rect, r) = ui.allocate_exact_size(vec2(width, 36.0), Sense::click());
-                let fill = if selected { theme::WIDGET_HOVER } else if r.hovered() { theme::SURFACE } else { Color32::TRANSPARENT };
-                ui.painter().rect_filled(rect, CornerRadius::same(theme::RADIUS), fill);
-                let color = if selected || r.hovered() { theme::TEXT } else { theme::TEXT_DIM };
-                ui.painter().text(rect.center(), Align2::CENTER_CENTER, tr(label), theme::medium(13.0), color);
-                if r.clicked() {
-                    self.inspector_tab = tab;
-                }
-            }
+            let total_w = ui.available_width() - 8.0;
+            Frame::new()
+                .fill(theme::SURFACE)
+                .stroke(Stroke::new(1.0, theme::BORDER))
+                .corner_radius(CornerRadius::same(theme::RADIUS))
+                .inner_margin(Margin::symmetric(2, 2))
+                .show(ui, |ui| {
+                    ui.set_width(total_w);
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    let count = tabs.len() as f32;
+                    let item_w = ((total_w - 4.0 - 2.0 * (count - 1.0)) / count).floor();
+                    ui.horizontal(|ui| {
+                        for (tab, label) in tabs {
+                            let selected = self.inspector_tab == tab;
+                            let (rect, r) = ui.allocate_exact_size(vec2(item_w, 28.0), Sense::click());
+                            let fill = if selected {
+                                theme::ACCENT
+                            } else if r.hovered() {
+                                theme::WIDGET_HOVER
+                            } else {
+                                Color32::TRANSPARENT
+                            };
+                            ui.painter().rect_filled(rect, CornerRadius::same(theme::RADIUS - 1), fill);
+                            let color = if selected {
+                                theme::ON_ACCENT
+                            } else if r.hovered() {
+                                theme::TEXT
+                            } else {
+                                theme::TEXT_DIM
+                            };
+                            let font = if selected { theme::bold(12.0) } else { theme::medium(12.0) };
+                            ui.painter().text(rect.center(), Align2::CENTER_CENTER, tr(label), font, color);
+                            if r.clicked() {
+                                self.inspector_tab = tab;
+                            }
+                        }
+                    });
+                });
         });
-        ui.add_space(8.0);
+        ui.add_space(6.0);
         let line = ui.max_rect().x_range();
         let y = ui.cursor().top();
         ui.painter().hline(line, y, Stroke::new(1.0, theme::BORDER));
 
-        // Viewport settings don't need a model.
+        // Viewport and render settings don't need a model.
         if self.inspector_tab == InspectorTab::Shading {
             ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                Frame::new().inner_margin(Margin::same(16)).show(ui, |ui| self.shading_tab(ui));
+                Frame::new().inner_margin(Margin::same(16)).show(ui, |ui| {
+                    widgets::begin_cards(ui);
+                    self.shading_tab(ui);
+                    widgets::end_cards(ui);
+                });
+            });
+            return;
+        }
+        if self.inspector_tab == InspectorTab::Render {
+            ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                Frame::new().inner_margin(Margin::same(16)).show(ui, |ui| {
+                    widgets::begin_cards(ui);
+                    self.render_tab(ui);
+                    widgets::end_cards(ui);
+                });
             });
             return;
         }
@@ -912,16 +1419,24 @@ impl ViewerApp {
         match self.inspector_tab {
             InspectorTab::Info => {
                 ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    Frame::new().inner_margin(Margin::same(16)).show(ui, |ui| self.info_tab(ui));
+                    Frame::new().inner_margin(Margin::same(16)).show(ui, |ui| {
+                        widgets::begin_cards(ui);
+                        self.info_tab(ui);
+                        widgets::end_cards(ui);
+                    });
                 });
             }
             InspectorTab::Materials => {
                 ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    Frame::new().inner_margin(Margin::same(16)).show(ui, |ui| self.materials_tab(ui));
+                    Frame::new().inner_margin(Margin::same(16)).show(ui, |ui| {
+                        widgets::begin_cards(ui);
+                        self.materials_tab(ui);
+                        widgets::end_cards(ui);
+                    });
                 });
             }
             InspectorTab::Scene => Frame::new().inner_margin(Margin::same(8)).show(ui, |ui| self.scene_tab(ui)).inner,
-            InspectorTab::Shading => {}
+            InspectorTab::Shading | InspectorTab::Render => {}
         }
     }
 
@@ -937,12 +1452,293 @@ impl ViewerApp {
             )
         });
         ui.label(RichText::new(tr("The options below change with the mode.")).size(11.0).color(theme::TEXT_DIM));
-        ui.add_space(6.0);
-        ui.painter().hline(ui.max_rect().x_range(), ui.cursor().top(), Stroke::new(1.0, theme::BORDER));
-        ui.add_space(6.0);
-        let action = popovers::shading(ui, &mut self.settings, &mut self.thumbs);
+        let manufacturing = self.manufacturing();
+        if manufacturing && self.settings.shading != ShadingMode::Wireframe {
+            popovers::part_material(ui, &mut self.settings);
+        }
+        let action = popovers::shading(ui, &mut self.settings, &mut self.thumbs, manufacturing);
         if let Some(a) = action {
             self.apply_popover_action(a);
+        }
+    }
+
+    /// Dedicated Render tab: resolution, supersampling, lights and shadows, turntable and export.
+    fn render_tab(&mut self, ui: &mut Ui) {
+        let has_model = self.info.is_some();
+        let ctx = ui.ctx().clone();
+        let mut do_export_image = false;
+        let mut do_export_turntable = false;
+        let mut do_split_shading = false;
+        let busy = self.turntable_job.is_some();
+        let view_px = self.export_view_px();
+
+        {
+            let s = &mut self.settings;
+
+            // --- SHADING QUICK SWITCH ---
+            widgets::section(ui, "Shading Mode");
+            ui.horizontal(|ui| {
+                widgets::segmented(
+                    ui,
+                    &mut s.shading,
+                    &[(ShadingMode::Wireframe, "Wireframe"), (ShadingMode::Solid, "Solid"), (ShadingMode::Rendered, "Rendered")],
+                );
+            });
+
+            // --- RESOLUTION & QUALITY ---
+            widgets::section(ui, "Resolution");
+            let current_label = s.render_resolution.label();
+            egui::ComboBox::from_id_salt("render_res_preset")
+                .selected_text(tr(current_label))
+                .width(ui.available_width() - 8.0)
+                .show_ui(ui, |ui| {
+                    for r in RenderResolution::ALL {
+                        ui.selectable_value(&mut s.render_resolution, r, tr(r.label()));
+                    }
+                });
+
+            if s.render_resolution == RenderResolution::Custom {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(tr("Size:")).color(theme::TEXT_DIM));
+                    ui.add(egui::DragValue::new(&mut s.render_custom_w).range(64..=8192).suffix(" px").speed(2.0));
+                    ui.label("×");
+                    ui.add(egui::DragValue::new(&mut s.render_custom_h).range(64..=8192).suffix(" px").speed(2.0));
+                });
+            }
+
+            let [eff_w, eff_h] = s.render_resolution.dimensions(view_px, s.render_custom_w, s.render_custom_h);
+            ui.label(
+                RichText::new(trf("Output: {w} × {h} px", &[("w", &eff_w), ("h", &eff_h)]))
+                    .size(11.0)
+                    .color(theme::TEXT_DIM),
+            );
+
+            widgets::section(ui, "Quality (SSAA)");
+            ui.horizontal(|ui| {
+                widgets::segmented(
+                    ui,
+                    &mut s.render_ssaa,
+                    &[(1, "1× Normal"), (2, "2× High"), (4, "4× Ultra")],
+                );
+            });
+            let ssaa_hint = match s.render_ssaa {
+                1 => tr("Standard 4× MSAA. Fastest rendering."),
+                2 => tr("2× Supersampling (SSAA) + Lanczos3 filter. Razor-sharp speculars and edges."),
+                _ => tr("4× Ultra Supersampling. Master resolution for prints and fine details."),
+            };
+            ui.label(RichText::new(ssaa_hint).size(11.0).color(theme::TEXT_DIM));
+
+            ui.add_space(4.0);
+            ui.checkbox(&mut s.render_framing_guide, tr("Framing guide (Passepartout)"))
+                .on_hover_text(tr("Darkens regions outside the render aspect ratio in the viewport"));
+
+            ui.checkbox(&mut s.export_transparent, tr("Transparent background"))
+                .on_hover_text(tr("Export PNG with alpha transparency (disables background sky)"));
+
+            ui.checkbox(&mut s.export_grid, tr("Include floor grid"));
+
+            ui.add_space(6.0);
+            ui.add_enabled_ui(has_model, |ui| {
+                if primary_button(ui, "Render Image…", 36.0, Some("F12")).on_hover_text(tr("Render and save image (F12)")).clicked() {
+                    do_export_image = true;
+                }
+            });
+            if !has_model {
+                ui.label(RichText::new(tr("Open a file to render.")).size(11.0).color(theme::TEXT_DIM));
+            }
+
+            ui.separator();
+
+            // --- LIGHTS AND SHADOWS ---
+            widgets::section(ui, "Lights & Shadows");
+
+            ui.checkbox(&mut s.show_light_gizmos, tr("Show light gizmos in viewport"))
+                .on_hover_text(tr("Display interactive light handles in the 3D viewport (Photo Mode)"));
+
+            ui.checkbox(&mut s.shadows, tr("Model shadows"))
+                .on_hover_text(tr("Primary light casts shadows on the model"));
+            ui.checkbox(&mut s.floor_shadow, tr("Shadow on the floor"))
+                .on_hover_text(tr("A floor under the model that catches its shadow and contact shading"));
+            ui.add_enabled_ui(s.shadows || s.floor_shadow, |ui| {
+                ui.add(egui::Slider::new(&mut s.shadow_softness, 0.0..=1.0).text(tr("Softness")));
+            });
+
+            ui.add_space(6.0);
+
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(tr("Studio Lights")).strong());
+                ui.label(RichText::new(format!("({}/6)", s.lights.len())).size(11.0).color(theme::TEXT_DIM));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if s.lights.len() < 6 {
+                        if ui.small_button(tr("+ Add Light")).on_hover_text(tr("Add a new custom light source (up to 6)")).clicked() {
+                            let idx = s.lights.len() + 1;
+                            let yaw = (s.lights.len() as f32 * 60.0 + 35.0).rem_euclid(360.0);
+                            s.show_light_gizmos = true;
+                            s.lights.push(crate::settings::CustomLight {
+                                name: format!("Light {idx}"),
+                                enabled: true,
+                                follow_env: false,
+                                yaw,
+                                pitch: 45.0,
+                                strength: 1.0,
+                                color: [255, 255, 255],
+                            });
+                        }
+                    }
+                });
+            });
+
+            let mut remove_light_idx = None;
+            let total_lights = s.lights.len();
+
+            for (idx, light) in s.lights.iter_mut().enumerate() {
+                ui.add_space(2.0);
+                Frame::new()
+                    .fill(theme::SURFACE)
+                    .stroke(Stroke::new(1.0, theme::BORDER))
+                    .corner_radius(CornerRadius::same(theme::RADIUS))
+                    .inner_margin(Margin::same(8))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut light.enabled, "");
+                            let name_label = if idx == 0 {
+                                tr("Key Light")
+                            } else if idx == 1 {
+                                tr("Fill Light")
+                            } else {
+                                light.name.as_str()
+                            };
+                            let text_color = if light.enabled { theme::TEXT } else { theme::TEXT_DIM };
+                            ui.label(RichText::new(name_label).strong().color(text_color));
+
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if total_lights > 1 {
+                                    if ui.small_button("✕").on_hover_text(tr("Remove this light")).clicked() {
+                                        remove_light_idx = Some(idx);
+                                    }
+                                }
+                                ui.color_edit_button_srgb(&mut light.color);
+                            });
+                        });
+
+                        if light.enabled {
+                            ui.add_space(4.0);
+                            if idx == 0 {
+                                ui.horizontal(|ui| {
+                                    widgets::segmented(
+                                        ui,
+                                        &mut light.follow_env,
+                                        &[(true, "Follow HDRI"), (false, "Custom")],
+                                    );
+                                });
+                                if light.follow_env {
+                                    ui.label(
+                                        RichText::new(tr("Tracks the brightest point in the sky; turns with Environment rotation."))
+                                            .size(11.0)
+                                            .color(theme::TEXT_DIM),
+                                    );
+                                }
+                            }
+                            if !light.follow_env {
+                                ui.add(egui::Slider::new(&mut light.yaw, 0.0..=360.0).suffix("°").text(tr("Angle (Yaw)")));
+                                ui.add(egui::Slider::new(&mut light.pitch, -60.0..=85.0).suffix("°").text(tr("Elevation (Pitch)")));
+                            }
+                            ui.add(egui::Slider::new(&mut light.strength, 0.0..=3.0).text(tr("Intensity")));
+
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(tr("Presets:")).size(10.5).color(theme::TEXT_DIM));
+                                for (col, tip) in [
+                                    ([255, 255, 255], "Pure White"),
+                                    ([255, 224, 178], "Warm 3200K"),
+                                    ([255, 244, 229], "Daylight 5500K"),
+                                    ([227, 242, 253], "Cool 6500K"),
+                                    ([255, 213, 79], "Golden Hour"),
+                                ] {
+                                    let (rect, r) = ui.allocate_exact_size(Vec2::splat(13.0), Sense::click());
+                                    ui.painter().rect_filled(rect, CornerRadius::same(2), Color32::from_rgb(col[0], col[1], col[2]));
+                                    if r.on_hover_text(tr(tip)).clicked() {
+                                        light.color = col;
+                                    }
+                                }
+                            });
+                        }
+                    });
+            }
+
+            if let Some(remove_idx) = remove_light_idx {
+                s.lights.remove(remove_idx);
+            }
+
+            // Sync legacy fields
+            if let Some(l0) = s.lights.first() {
+                s.light_follow_env = l0.follow_env;
+                s.light_yaw = l0.yaw;
+                s.light_pitch = l0.pitch;
+                s.light_strength = l0.strength;
+                s.light_color = l0.color;
+            }
+            if let Some(l1) = s.lights.get(1) {
+                s.light2_enabled = l1.enabled;
+                s.light2_yaw = l1.yaw;
+                s.light2_pitch = l1.pitch;
+                s.light2_strength = l1.strength;
+                s.light2_color = l1.color;
+            }
+
+            ui.add_space(8.0);
+            widgets::section(ui, "Split Shading (Compare)");
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(has_model, |ui| {
+                    if ui.button(tr("Compare Shading Styles…")).on_hover_text(tr("Split view: compare two shading styles on this model")).clicked() {
+                        do_split_shading = true;
+                    }
+                });
+            });
+
+            ui.separator();
+
+            // --- TURNTABLE ---
+            widgets::section(ui, "Turntable (360° Animation)");
+            ui.horizontal(|ui| {
+                widgets::segmented(ui, &mut s.turntable_mp4, &[(false, "GIF"), (true, "MP4")]);
+            });
+            if s.turntable_mp4 && !super::turntable::ffmpeg_available() {
+                ui.label(
+                    RichText::new(tr("MP4 needs ffmpeg on PATH (winget install ffmpeg). GIF works natively."))
+                        .size(11.0)
+                        .color(theme::ERROR),
+                );
+            }
+            ui.horizontal(|ui| {
+                widgets::segmented(ui, &mut s.turntable_size, &[(480, "480"), (720, "720"), (1080, "1080")]);
+            });
+            ui.add(egui::Slider::new(&mut s.turntable_seconds, 2.0..=12.0).step_by(0.5).suffix(" s").text(tr("Length")));
+            ui.add_enabled_ui(self.anim.as_ref().is_some_and(|a| a.has_clips()), |ui| {
+                ui.checkbox(&mut s.turntable_animate, tr("Play clip during turntable"));
+            });
+
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(has_model && !busy, |ui| {
+                    if ui.button(tr("Export Turntable…")).clicked() {
+                        do_export_turntable = true;
+                    }
+                });
+                if busy {
+                    ui.add(egui::Spinner::new().size(14.0));
+                    ui.label(RichText::new(tr("Encoding…")).size(11.0).color(theme::TEXT_DIM));
+                }
+            });
+        }
+
+        if do_export_image {
+            self.export_image(&ctx);
+        }
+        if do_export_turntable {
+            self.export_turntable(&ctx);
+        }
+        if do_split_shading {
+            self.open_compare_same_model(&ctx);
         }
     }
 
@@ -1033,12 +1829,15 @@ impl ViewerApp {
         });
         ui.add_space(12.0);
 
-        self.texel_rows(ui);
+        if !self.manufacturing() {
+            self.texel_rows(ui);
+        }
 
         // Scale: declared units, where the scene origin sits, and a sanity check on size.
         let bounds = self.visible_bounds(false);
         let units = match info.units {
             crate::scene::Units::Meters => tr("Meters (glTF)").to_string(),
+            crate::scene::Units::Undeclared if self.manufacturing() => tr("Not stored (mm)").to_string(),
             crate::scene::Units::Undeclared => tr("Not stored (m)").to_string(),
             crate::scene::Units::Declared(m) => unit_name(m, &info.path),
         };
@@ -1392,13 +2191,30 @@ impl ViewerApp {
                     widgets::hint(ui, keys, action);
                 }
                 widgets::hint(ui, &["Q"], "Back to select");
+            } else if self.info.is_some() && self.tool.transforms() {
+                if self.lay_face_armed {
+                    widgets::hint(ui, &["LMB"], "Face to lay on the bed");
+                    widgets::hint(ui, &["Esc"], "Cancel");
+                } else {
+                    widgets::hint(ui, &["LMB"], match self.tool {
+                        Tool::Rotate => "Drag a ring",
+                        Tool::Scale => "Drag a handle, or the center for all axes",
+                        _ => "Drag an arrow, or the center",
+                    });
+                    widgets::hint(ui, &["Ctrl"], "Snap");
+                    widgets::hint(ui, &["L"], "Lay on face");
+                    widgets::hint(ui, &["B"], "Drop to bed");
+                    widgets::hint(ui, &["Ctrl", "Z"], "Undo");
+                }
+                widgets::hint(ui, &["Q"], "Back to select");
             } else if self.info.is_some() && self.tool == Tool::Measure {
                 widgets::hint(ui, &["LMB"], if self.measure_start.is_some() { "Second point" } else { "First point" });
                 if self.measure_start.is_some() {
                     widgets::hint(ui, &["Esc"], "Cancel point");
                 }
                 if !self.measures.is_empty() {
-                    widgets::hint(ui, &["Del"], "Clear measurements");
+                    widgets::hint(ui, &["Del"], "Remove last");
+                    widgets::hint(ui, &["Shift", "Del"], "Clear all");
                 }
                 widgets::hint(ui, &["Ctrl"], "No vertex snap");
                 widgets::hint(ui, &["Q"], "Back to select");
@@ -1535,7 +2351,7 @@ impl ViewerApp {
                             icons::warning(ui.painter(), r, if toast.error { theme::ERROR } else { theme::TEXT });
                             ui.label(RichText::new(&toast.text).color(theme::TEXT));
                             if let Some(a) = toast.action {
-                                if primary_button(ui, "Fix", 32.0, None).clicked() {
+                                if primary_button(ui, if a == ToastAction::OpenReleases { "Download" } else { "Fix" }, 32.0, None).clicked() {
                                     act = Some(a);
                                 }
                             }
@@ -1545,10 +2361,17 @@ impl ViewerApp {
                         });
                     });
             });
-        if let Some(ToastAction::ShowMaterials) = act {
-            self.settings.show_sidebar = true;
-            self.inspector_tab = InspectorTab::Materials;
-            close = true;
+        match act {
+            Some(ToastAction::ShowMaterials) => {
+                self.settings.show_sidebar = true;
+                self.inspector_tab = InspectorTab::Materials;
+                close = true;
+            }
+            Some(ToastAction::OpenReleases) => {
+                let _ = std::process::Command::new("explorer.exe").arg(format!("{REPO_URL}/releases/latest")).spawn();
+                close = true;
+            }
+            None => {}
         }
         if close {
             self.toast = None;
@@ -1604,7 +2427,8 @@ fn unit_name(meters: f64, path: &Path) -> String {
 
 /// A hint when the size looks like a units mix-up (the classic 100x FBX).
 fn scale_note(largest: f32, units: crate::scene::Units) -> Option<String> {
-    if !(largest > 0.0) {
+    // Manufacturing reads unitless files as millimeters already.
+    if !(largest > 0.0) || meters_per_unit() != 1.0 {
         return None;
     }
     if largest > 100.0 {
@@ -1680,4 +2504,10 @@ pub(super) fn drop_overlay(ui: &Ui, viewport: Rect, has_model: bool) {
         painter.text(zone.center() - vec2(0.0, 12.0), Align2::CENTER_CENTER, tr(title), theme::bold(22.0), theme::TEXT);
         painter.text(zone.center() + vec2(0.0, 16.0), Align2::CENTER_CENTER, tr(sub), FontId::proportional(13.0), theme::TEXT_DIM);
     }
+}
+
+/// Elevation range a light can take, in degrees: the key light (the shadow caster) stays above
+/// the horizon, the others may light from below like the Render tab's slider allows.
+pub(super) fn light_pitch_range(index: usize) -> (f32, f32) {
+    if index == 0 { (5.0, 85.0) } else { (-60.0, 85.0) }
 }

@@ -37,6 +37,16 @@ impl ViewerApp {
                 ui.add_enabled_ui(self.anim.as_ref().is_some_and(|a| a.has_clips()), |ui| {
                     ui.checkbox(&mut s.turntable_animate, tr("Play the animation during the turn"));
                 });
+                widgets::section(ui, "Background");
+                ui.checkbox(&mut s.export_transparent, tr("Transparent background"))
+                    .on_hover_text(tr("Export with alpha transparency (best with GIF)"));
+                if s.turntable_mp4 && s.export_transparent {
+                    ui.label(
+                        RichText::new(tr("MP4 does not support transparency; export as GIF for transparent alpha."))
+                            .size(11.0)
+                            .color(theme::TEXT_DIM),
+                    );
+                }
                 ui.add_space(6.0);
                 ui.label(RichText::new(tr("Turns once around the model from the current view, with the current shading.")).size(11.0).color(theme::TEXT_DIM));
                 ui.add_space(6.0);
@@ -66,7 +76,7 @@ impl ViewerApp {
         }
     }
 
-    fn export_turntable(&mut self, ctx: &egui::Context) {
+    pub(super) fn export_turntable(&mut self, ctx: &egui::Context) {
         let mp4 = self.settings.turntable_mp4;
         if mp4 && !ffmpeg_available() {
             self.show_toast(ctx, tr("MP4 needs ffmpeg on the PATH (winget install ffmpeg). GIF works without it.").to_string(), true);
@@ -92,7 +102,7 @@ impl ViewerApp {
         let mp4 = self.settings.turntable_mp4;
 
         // Frame size: the view's shape, long side as chosen, even (H.264 needs it).
-        let [vw, vh] = self.viewport_px;
+        let [vw, vh] = self.export_view_px();
         let long = self.settings.turntable_size as f32;
         let k = long / vw.max(vh).max(1) as f32;
         let even = |v: f32| ((v / 2.0).round() as u32 * 2).max(2);
@@ -137,7 +147,8 @@ impl ViewerApp {
                     }
                 }
             }
-            let Some((_, pixels)) = self.render_offscreen(size, false) else {
+            let transparent = self.settings.export_transparent || self.settings.transparent_background;
+            let Some((_, pixels)) = self.render_offscreen(size, transparent) else {
                 error = Some(tr("Couldn't render the image").to_string());
                 break;
             };
@@ -188,7 +199,7 @@ fn ffmpeg_command() -> Command {
     cmd
 }
 
-fn ffmpeg_available() -> bool {
+pub(super) fn ffmpeg_available() -> bool {
     static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *AVAILABLE.get_or_init(|| {
         ffmpeg_command().arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success())

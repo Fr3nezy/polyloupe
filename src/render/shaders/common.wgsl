@@ -1,4 +1,9 @@
-// Shared declarations, prepended to every viewport shader.
+struct LightData {
+    // xyz: unit direction towards the light, w: intensity
+    dir: vec4<f32>,
+    // rgb: linear color, w: 1.0 if enabled else 0.0
+    color: vec4<f32>,
+};
 
 struct Globals {
     view_proj: mat4x4<f32>,
@@ -31,7 +36,26 @@ struct Globals {
     // x: normal line length (world units, 0 = off), y: 1 for the face orientation overlay.
     normals: vec4<f32>,
     // x: 1 when the interface calls Y up: world Y lines are drawn blue (Z) and world Z green (Y).
+    // y: 1 for the part color (Manufacturing): the file's materials are ignored.
     display: vec4<f32>,
+    // Part material (Manufacturing): x material id (0 = none; Rendered only), y layer height in
+    // world units (0 = no layer lines), z metal finish, w world units per millimeter.
+    finish: vec4<f32>,
+    // Part color, linear RGB.
+    finish_color: vec4<f32>,
+    // Surface wear (Manufacturing): x grain and y scratch strength (0..1), z grain and w scratch
+    // map tile size in world units.
+    surface: vec4<f32>,
+    // Shadow maps: the key light's and a straight-down one (contact shading on the floor).
+    light0: mat4x4<f32>,
+    light1: mat4x4<f32>,
+    // Multi-light array (light 0 casts shadows, lights 1..5 are fill/rim/accent lights).
+    lights: array<LightData, 6>,
+    // x 1 to draw the shadow floor, y floor height, z softness (shadow map texels),
+    // w normal offset against shadow acne (world units).
+    shadow: vec4<f32>,
+    // Floor: xy center, z radius of the shaded area (world units).
+    floor: vec4<f32>,
 };
 
 fn section_cuts(world_pos: vec3<f32>) -> bool {

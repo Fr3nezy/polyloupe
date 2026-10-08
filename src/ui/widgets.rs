@@ -187,11 +187,103 @@ pub fn segmented<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T,
 }
 
 
+/// Pill of mutually exclusive buttons with an icon and, when `labels` is on, a name next to it
+/// (the viewport toolbar's workspace switch). Returns true when the value changed.
+pub fn segmented_icons<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T, IconFn, &str)], labels: bool) -> bool {
+    let font = egui::FontId::proportional(13.0);
+    let mut clicked = None;
+    Frame::new()
+        .fill(theme::BG_APP)
+        .stroke(Stroke::new(1.0, theme::BORDER))
+        .corner_radius(radius())
+        .inner_margin(Margin::same(1))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.horizontal(|ui| {
+                for (opt, icon, label) in options {
+                    let text_w = if labels { ui.painter().layout_no_wrap(tr(label).to_string(), font.clone(), theme::TEXT).size().x + 6.0 } else { 0.0 };
+                    let size = Vec2::new(theme::TOOLBAR_HEIGHT - 4.0 + text_w + if labels { 10.0 } else { 0.0 }, theme::TOOLBAR_HEIGHT - 4.0);
+                    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+                    let selected = *opt == *value;
+                    let (fill, fg) = colors(selected, response.hovered(), response.is_pointer_button_down_on());
+                    let fg = if selected || response.hovered() { fg } else { theme::TEXT_DIM };
+                    ui.painter().rect_filled(rect, CornerRadius::same(theme::RADIUS - 1), fill);
+                    let side = (size.y * 0.6).min(20.0);
+                    let icon_center = if labels { egui::pos2(rect.left() + 5.0 + side * 0.5 + 4.0, rect.center().y) } else { rect.center() };
+                    icon(ui.painter(), Rect::from_center_size(icon_center, Vec2::splat(side)), fg);
+                    if labels {
+                        ui.painter().text(egui::pos2(icon_center.x + side * 0.5 + 6.0, rect.center().y), egui::Align2::LEFT_CENTER, tr(label), font.clone(), fg);
+                    }
+                    focus_ring(ui, rect, &response);
+                    if response.clicked() {
+                        clicked = Some(*opt);
+                    }
+                }
+            });
+        });
+    match clicked {
+        Some(o) if o != *value => {
+            *value = o;
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Section title: monospace, uppercase, tracked out, dim.
 pub fn section(ui: &mut Ui, title: &str) {
+    if close_card(ui) {
+        // A card per section (see `begin_cards`): room for the frames and the gap between them.
+        ui.add_space(22.0);
+        let shape = ui.painter().add(egui::Shape::Noop);
+        let top = ui.cursor().top() - 10.0;
+        ui.ctx().data_mut(|d| d.insert_temp(cards_id(), Some(Card { shape, top })));
+        ui.label(theme::caps(tr(title), 11.0, theme::TEXT));
+        ui.add_space(4.0);
+        return;
+    }
     ui.add_space(4.0);
     ui.label(theme::caps(tr(title), 11.0, theme::TEXT_DIM));
     ui.add_space(2.0);
+}
+
+/// A section's card: the background slot reserved under its content, and where it starts.
+#[derive(Clone, Copy)]
+struct Card {
+    shape: egui::layers::ShapeIdx,
+    top: f32,
+}
+
+fn cards_id() -> egui::Id {
+    egui::Id::new("section_cards")
+}
+
+/// From here to `end_cards`, every `section` gets its own framed card, so groups read as
+/// separate blocks instead of one long list (the inspector).
+pub fn begin_cards(ui: &mut Ui) {
+    ui.ctx().data_mut(|d| d.insert_temp::<Option<Card>>(cards_id(), None));
+    ui.add_space(-12.0);
+}
+
+pub fn end_cards(ui: &mut Ui) {
+    close_card(ui);
+    ui.ctx().data_mut(|d| d.remove::<Option<Card>>(cards_id()));
+}
+
+/// Paints the open card's frame behind what was drawn since its section began. Returns whether
+/// cards are on.
+fn close_card(ui: &mut Ui) -> bool {
+    let Some(open) = ui.ctx().data(|d| d.get_temp::<Option<Card>>(cards_id())) else { return false };
+    if let Some(card) = open {
+        let x = ui.max_rect().x_range();
+        let rect = egui::Rect::from_x_y_ranges(x.min - 10.0..=x.max + 10.0, card.top..=ui.cursor().top() + 8.0);
+        ui.painter().set(
+            card.shape,
+            egui::epaint::RectShape::new(rect, CornerRadius::same(6), Color32::from_rgb(0x0c, 0x0c, 0x0c), Stroke::new(1.0, theme::BORDER), egui::StrokeKind::Inside),
+        );
+    }
+    ui.ctx().data_mut(|d| d.insert_temp::<Option<Card>>(cards_id(), None));
+    true
 }
 
 

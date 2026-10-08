@@ -5,7 +5,7 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\install-thumbnails.ps1 [-AllUsers] -Uninstall
 #
 # Copies polyloupe_thumbs.dll out of the build folder (so rebuilding the project never fights with
-# Windows holding the DLL), then registers the handler for .glb .gltf .fbx .obj .stl .ply .3mf .dae.
+# Windows holding the DLL), then registers the handler for .glb .gltf .fbx .obj .stl .ply .3mf .dae .step .stp.
 # The DLL renders on its own (no GPU) inside Windows' thumbnail process, which only hands it the
 # file's bytes. .gltf and .obj, which can keep data in files next to them, go through a second
 # handler that gets the path and runs polyloupe.exe --thumbnail, so polyloupe.exe must sit next to
@@ -72,5 +72,5 @@ foreach ($name in 'polyloupe_thumbs.dll', 'polyloupe.exe') {
 # The all-users registration also removes per-user ones, which would shadow it.
 Invoke-Regsvr32 (@('/s') + $scope) $dll
 
-Write-Host "Installed to $dest and registered for .glb .gltf .fbx .obj .stl .ply .3mf .dae."
+Write-Host "Installed to $dest and registered for .glb .gltf .fbx .obj .stl .ply .3mf .dae .step .stp."
 Write-Host 'Existing thumbnails refresh once Windows drops its cache (new files show immediately).'

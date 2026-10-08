@@ -177,10 +177,13 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "3D models" => "Modelli 3D",
         "Load HDRI environment" => "Carica ambiente HDRI",
         "This file" => "Questo file",
-        "{ext} isn't supported yet. Supported: glTF, GLB, FBX, OBJ, STL, PLY, 3MF, DAE, and .hdr / .exr environments." => {
-            "{ext} non è ancora supportato. Supportati: glTF, GLB, FBX, OBJ, STL, PLY, 3MF, DAE e ambienti .hdr / .exr."
+        "{ext} isn't supported yet. Supported: glTF, GLB, FBX, OBJ, STL, PLY, 3MF, DAE, STEP, and .hdr / .exr environments." => {
+            "{ext} non è ancora supportato. Supportati: glTF, GLB, FBX, OBJ, STL, PLY, 3MF, DAE, STEP e ambienti .hdr / .exr."
         }
         "Couldn't open {name}: {error}" => "Impossibile aprire {name}: {error}",
+        "the model needs {needed} MB GPU buffers, this GPU allows {limit} MB" => {
+            "il modello richiede buffer GPU da {needed} MB, questa GPU ne consente {limit} MB"
+        }
         "{first} (+{more} more)" => "{first} (+{more} altri)",
         "Missing texture: {name}" => "Texture mancante: {name}",
         "Unsupported glTF extensions ({list}): the model may look wrong or be incomplete" => {
@@ -190,6 +193,123 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Save image" => "Salva immagine",
         "PNG image" => "Immagine PNG",
         "Saved {name}" => "Salvata {name}",
+        "Model saved: {name}" => "Modello salvato: {name}",
+        "Manufacturing" => "Manifattura",
+        "3D Art" => "3D Art",
+        "Workspace\nManufacturing: CAD and 3D printing, millimeters, plain plastic material\n3D Art: textures, UVs, animation, the file's own materials" => {
+            "Area di lavoro\nManifattura: CAD e stampa 3D, millimetri, materiale plastica neutra\n3D Art: texture, UV, animazione, i materiali del file"
+        }
+        "PolyLoupe {version} is available" => "È disponibile PolyLoupe {version}",
+        "Surface imperfection" => "Imperfezioni superficie",
+        "Fine relief and uneven gloss over the whole model, for a more realistic preview. 0 = perfectly smooth" => {
+            "Rilievo fine e lucentezza non uniforme su tutto il modello, per un'anteprima più realistica. 0 = perfettamente liscio"
+        }
+        "Download" => "Scarica",
+        "Check for updates" => "Controlla gli aggiornamenti",
+        "Once a day, PolyLoupe asks GitHub whether a newer release exists. Nothing is downloaded or installed" => {
+            "Una volta al giorno PolyLoupe chiede a GitHub se esiste una versione più recente. Non scarica né installa nulla"
+        }
+        "Hide the side panel (N)" => "Nascondi il pannello laterale (N)",
+        "Show the side panel (N)" => "Mostra il pannello laterale (N)",
+        "Part Material" => "Materiale del pezzo",
+        "Plastic" => "Plastica",
+        "File materials" => "Materiali del file",
+        "The colors and materials stored in the file" => "I colori e i materiali salvati nel file",
+        "Satin plastic, the file's materials are ignored" => "Plastica satinata, i materiali del file sono ignorati",
+        "Smooth satin plastic, no layer lines" => "Plastica satinata liscia, senza layer",
+        "Not stored (mm)" => "Non salvate (mm)",
+        "Print Finish" => "Finitura di stampa",
+        "Resin" => "Resina",
+        "Metal SLM" => "Metallo SLM",
+        "FDM, matte, visible layer lines" => "FDM, opaco, layer visibili",
+        "FDM, glossy, visible layer lines" => "FDM, lucido, layer visibili",
+        "FDM, satin metallic sheen" => "FDM, riflesso satinato metallico",
+        "SLA/MSLA, smooth with fine layers" => "SLA/MSLA, liscio con layer sottili",
+        "Powder bed, grainy and matte" => "Letto di polvere, granuloso e opaco",
+        "Laser-sintered metal, grainy" => "Metallo sinterizzato laser, granuloso",
+        "Layer height" => "Altezza layer",
+        "Layer lines run along Z: lay the part on a face to change the print direction" => {
+            "I layer seguono l'asse Z: appoggia il pezzo su una faccia per cambiare la direzione di stampa"
+        }
+        "Click the face that goes on the bed · Esc to cancel" => "Clicca la faccia da appoggiare sul piano · Esc per annullare",
+        "This face goes on the bed" => "Questa faccia va sul piano",
+        "Pick the workspace from the file type" => "Scegli l'area di lavoro dal tipo di file",
+        "STL, 3MF, STEP and PLY open in Manufacturing, the other formats in 3D Art. Off: the workspace you chose last" => {
+            "STL, 3MF, STEP e PLY si aprono in Manifattura, gli altri formati in 3D Art. Disattivata: l'ultima area scelta"
+        }
+        "Couldn't save {name}: {error}" => "Impossibile salvare {name}: {error}",
+        "Export Model…" => "Esporta modello…",
+        "Export Model" => "Esporta modello",
+        "Save the model as STL or 3MF, with the Move tool's changes" => {
+            "Salva il modello come STL o 3MF, con le modifiche dello strumento Sposta"
+        }
+        "Save the moved model as STL or 3MF" => "Salva il modello spostato come STL o 3MF",
+        "Still analyzing the model, try again in a moment" => "Analisi del modello in corso, riprova tra un attimo",
+        "No flat face to lay the model on" => "Nessuna faccia piana su cui appoggiare il modello",
+        "Select an object" => "Seleziona un oggetto",
+        "Click a face to put it down on the bed (L)" => "Clicca una faccia per appoggiarla sul piano (L)",
+        "Lay the model on its largest flat side (Shift L)" => "Appoggia il modello sul lato piano più grande (Shift L)",
+        "Move down until it touches the bed (B)" => "Abbassa finché tocca il piano (B)",
+        "Back to the position in the file (Alt G)" => "Torna alla posizione del file (Alt G)",
+        "Tools" => "Strumenti",
+        "Background" => "Sfondo",
+        "Studio" => "Studio",
+        "World" => "Ambiente",
+        "Light gray sweep without the grid, for product shots" => "Fondale grigio chiaro senza griglia, per foto di prodotto",
+        "Light and Shadows" => "Luci e ombre",
+        "Key light shadows" => "Ombre della luce principale",
+        "A light from the environment's brightest spot, casting shadows; it turns with the environment" => {
+            "Una luce dal punto più luminoso dell'ambiente, che proietta ombre; ruota con l'ambiente"
+        }
+        "Light strength" => "Intensità luce",
+        "Shadow on the floor" => "Ombra sul pavimento",
+        "A floor under the model that catches its shadow and contact shading" => {
+            "Un pavimento sotto il modello che riceve la sua ombra e l'ombra di contatto"
+        }
+        "Softness" => "Morbidezza",
+        "One color" => "Colore unico",
+        "FDM plastic" => "Plastica FDM",
+        "Metal" => "Metallo",
+        "PLA Silk" => "PLA Silk",
+        "Matte, visible layer lines" => "Opaco, layer visibili",
+        "Satin metallic sheen, layer lines" => "Riflesso metallico satinato, layer visibili",
+        "Glossy, visible layer lines" => "Lucido, layer visibili",
+        "Satin, visible layer lines" => "Satinato, layer visibili",
+        "Machined or sintered metal" => "Metallo lavorato o sinterizzato",
+        "Polished" => "Lucidato",
+        "Satin" => "Satinato",
+        "Brushed" => "Spazzolato",
+        "Blasted" => "Sabbiato",
+        "Layer lines" => "Linee dei layer",
+        "Rendered mode shows the material; Solid only its color and relief." => {
+            "Il materiale si vede in Renderizzato; in Solido solo colore e rilievo."
+        }
+        "Surface Wear" => "Usura superficie",
+        "Grain" => "Grana",
+        "Scratches" => "Graffi",
+        "Pattern size" => "Scala motivo",
+        "Fine relief, uneven gloss and dust, so the part looks less like a perfect CG surface" => {
+            "Rilievo fine, lucentezza irregolare e polvere, perché il pezzo non sembri una superficie CG perfetta"
+        }
+        "Handling marks: on metal they catch the light, on plastic they whiten" => {
+            "Segni d'uso: sul metallo catturano la luce, sulla plastica sbiancano"
+        }
+        "Scale of the grain and scratch patterns" => "Scala dei motivi di grana e graffi",
+        "Hex color, like #D9D9D6" => "Colore esadecimale, per esempio #D9D9D6",
+        "Move (W)" => "Sposta (W)",
+        "Rotate (E)" => "Ruota (E)",
+        "Scale (R)" => "Scala (R)",
+        "Lay on face" => "Appoggia su faccia",
+        "Auto orient" => "Orienta in automatico",
+        "Drop to bed" => "Porta sul piano",
+        "Reset" => "Ripristina",
+        "Face to lay on the bed" => "Faccia da appoggiare sul piano",
+        "Drag a ring" => "Trascina un anello",
+        "Drag a handle, or the center for all axes" => "Trascina una maniglia, o il centro per tutti gli assi",
+        "Drag an arrow, or the center" => "Trascina una freccia, o il centro",
+        "Snap" => "Scatti",
+        "Undo" => "Annulla",
+        "Cancel" => "Annulla",
         "Couldn't save the image: {error}" => "Impossibile salvare l'immagine: {error}",
         "Couldn't render the image" => "Impossibile renderizzare l'immagine",
 
@@ -232,6 +352,11 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "Statistics" => "Statistiche",
         "Navigation gizmo" => "Gizmo di navigazione",
         "Performance" => "Prestazioni",
+        "Graphics" => "Grafica",
+        "Lights" => "Luci",
+        "Light handles and their line to the model, in Rendered" => "Maniglie delle luci e la loro linea verso il modello, in Renderizzato",
+        "Quality" => "Qualità",
+        "Performance: for integrated GPUs and older PCs. No anti-aliasing, the view at 100% scale on high-DPI screens, lighter shadows. Exported images keep full quality" => "Prestazioni: per GPU integrate e PC datati. Niente anti-aliasing, vista al 100% sugli schermi ad alta densità, ombre più leggere. Le immagini esportate restano alla massima qualità",
         "Off: frames aren't capped to the monitor refresh rate" => {
             "Spento: i frame non sono limitati alla frequenza del monitor"
         }
@@ -248,7 +373,8 @@ fn italian_text(en: &str) -> Option<&'static str> {
         "First point" => "Primo punto",
         "Second point" => "Secondo punto",
         "Cancel point" => "Annulla punto",
-        "Clear measurements" => "Cancella misure",
+        "Remove last" => "Rimuovi ultima",
+        "Clear all" => "Cancella tutte",
         "Back to select" => "Torna a Seleziona",
         "No vertex snap" => "Senza snap ai vertici",
         "Section" => "Sezione",
@@ -520,8 +646,104 @@ fn italian_text(en: &str) -> Option<&'static str> {
             "Moltiplica la dimensione della vista, fino a 4096 px sul lato lungo"
         }
         "Transparent background" => "Sfondo trasparente",
+        "Transparent" => "Trasparente",
+        "Transparent background with checkerboard preview and alpha export" => {
+            "Sfondo trasparente con anteprima a scacchiera ed esportazione alpha"
+        }
+        "Export with alpha transparency (best with GIF)" => {
+            "Esporta con trasparenza alpha (consigliato con GIF)"
+        }
+        "MP4 does not support transparency; export as GIF for transparent alpha." => {
+            "Il formato MP4 non supporta la trasparenza; esporta come GIF per la trasparenza alpha."
+        }
         "Include the floor grid" => "Includi la griglia a pavimento",
         "Close" => "Chiudi",
+
+        // Render tab & Lighting
+        "Render" => "Render",
+        "Size:" => "Dimensione:",
+        "Standard 4× MSAA. Fastest rendering." => "Standard 4× MSAA. Rendering più rapido.",
+        "2× Supersampling (SSAA) + Lanczos3 filter. Razor-sharp speculars and edges." => {
+            "2× Supersampling (SSAA) + filtro Lanczos3. Riflessi e bordi nitidi senza aliasing."
+        }
+        "4× Ultra Supersampling. Master resolution for prints and fine details." => {
+            "4× Ultra Supersampling. Risoluzione master per stampe e dettagli fini."
+        }
+        "Framing guide (Passepartout)" => "Guida inquadratura (Passepartout)",
+        "Darkens regions outside the render aspect ratio in the viewport" => {
+            "Scurisce le aree esterne al formato di rendering nel viewport"
+        }
+        "Export PNG with alpha transparency (disables background sky)" => {
+            "Esporta PNG con trasparenza alpha (disattiva lo sfondo)"
+        }
+        "Include floor grid" => "Includi griglia del piano",
+        "Render and save image (F12)" => "Esegue il render e salva l'immagine (F12)",
+        "Render Image…" => "Render immagine…",
+        "Open a file to render." => "Apri un file per effettuare il render.",
+        "Tracks the brightest point in the sky; turns with Environment rotation." => {
+            "Segue il punto più luminoso del cielo; ruota con l'ambiente."
+        }
+        "Angle (Yaw)" => "Angolo (Yaw)",
+        "Elevation (Pitch)" => "Elevazione (Pitch)",
+        "Intensity" => "Intensità",
+        "Light color" => "Colore luce",
+        "Model shadows" => "Ombre del modello",
+        "Primary light casts shadows on the model" => "La luce principale proietta ombre sul modello",
+        "Enable Fill Light" => "Abilita luce di riempimento",
+        "Add a secondary studio light for rim or fill illumination" => {
+            "Aggiunge una luce secondaria da studio per controluce o riempimento"
+        }
+        "MP4 needs ffmpeg on PATH (winget install ffmpeg). GIF works natively." => {
+            "MP4 richiede ffmpeg nel PATH (winget install ffmpeg). Le GIF funzionano nativamente."
+        }
+        "Play clip during turntable" => "Riproduci l'animazione durante la rotazione",
+        "Encoding…" => "Codifica in corso…",
+        "Output: {w} × {h} px" => "Risoluzione: {w} × {h} px",
+        "Lights & Shadows configured in Render tab" => "Luci e ombre configurate nella tab Render",
+        "Primary Light" => "Luce principale",
+        "Follow HDRI" => "Segui HDRI",
+        "Pure White" => "Bianco puro",
+        "Warm 3200K" => "Calda 3200K",
+        "Daylight 5500K" => "Daylight 5500K",
+        "Cool 6500K" => "Fredda 6500K",
+        "Golden Hour" => "Golden Hour",
+        "Secondary / Fill Light" => "Luce secondaria / Riempimento",
+        "Turntable (360° Animation)" => "Turntable (Animazione 360°)",
+        "Shading Mode" => "Modalità ombreggiatura",
+        "1080p FHD (16:9)" => "1080p FHD (16:9)",
+        "1440p 2K (16:9)" => "1440p 2K (16:9)",
+        "2160p 4K (16:9)" => "2160p 4K (16:9)",
+        "1080p Square (1:1)" => "1080p Quadrato (1:1)",
+        "2048p Square (1:1)" => "2048p Quadrato (1:1)",
+        "Portrait 4:5 (1080×1350)" => "Portrait 4:5 (1080×1350)",
+        "Viewport (1×)" => "Viewport (1×)",
+        "Viewport (2×)" => "Viewport (2×)",
+        "Quality (SSAA)" => "Qualità (SSAA)",
+        "Solid + Wire" => "Solido + Wire",
+        "Split view: compare two shading styles on this model" => {
+            "Vista divisa: confronta due stili di visualizzazione su questo modello"
+        }
+        "Gradient" => "Gradiente",
+        "Show light gizmos in viewport" => "Mostra gizmo luci nel viewport",
+        "Display interactive light handles in the 3D viewport (Photo Mode)" => {
+            "Mostra manipolatori luce interattivi nel viewport 3D (Modalità Foto)"
+        }
+        "Studio Lights" => "Luci studio",
+        "+ Add Light" => "+ Aggiungi luce",
+        "Add a new custom light source (up to 6)" => "Aggiunge una nuova sorgente di luce personalizzata (fino a 6)",
+        "Key Light" => "Luce principale",
+        "Fill Light" => "Luce di riempimento",
+        "Remove this light" => "Rimuovi questa luce",
+        "Presets:" => "Preset:",
+        "Compare Shading Styles…" => "Confronta stili di visualizzazione…",
+        "Bounding box" => "Bounding box",
+        "Show model dimensions and bounding box axes" => "Mostra le dimensioni del modello e gli assi del bounding box",
+        "Color picker" => "Selettore colore",
+        "Opacity" => "Opacità",
+        "Style B: Wireframe" => "Stile B: Wireframe",
+        "Style B: Solid + Wireframe" => "Stile B: Solido + Wireframe",
+        "Style B: Solid" => "Stile B: Solido",
+        "Style B: Rendered" => "Stile B: Rendered",
         _ => return None,
     })
 }

@@ -17,12 +17,14 @@ use eframe::egui_wgpu;
 
 mod compare;
 mod shell;
+mod transform;
 mod turntable;
 mod uv_pane;
 
 use crate::anim::AnimPlayer;
 use crate::camera::{AxisView, Camera};
 use crate::cli::{CaptureOptions, LaunchOptions};
+use crate::update;
 use crate::i18n::{self, Language, tr, trf};
 use crate::instance;
 use shell::{InspectorTab, ToastAction, Tool};
@@ -32,7 +34,7 @@ use crate::render::{self, FrameInput, Renderer, environment};
 use crate::qa;
 use crate::snap;
 use crate::scene::{Aabb, MapRef, Scene};
-use crate::settings::{ColorMode, Environment, Settings, ShadingMode, TexturePass};
+use crate::settings::{ColorMode, Environment, Settings, ShadingMode, TexturePass, Workspace};
 use crate::ui::gizmo::{self, GizmoAction};
 use crate::ui::pie::{PieChoice, PieMenu};
 use crate::ui::popovers::{self, ChannelAction, PopoverAction, Thumbnails};
@@ -57,6 +59,10 @@ struct ObjectMeta {
     /// Pivot (object origin) in world space, rest pose, and its local X, Y and Z directions.
     origin: Vec3,
     axes: [Vec3; 3],
+    /// The same before the Move tool's transform.
+    rest_bounds: Aabb,
+    rest_origin: Vec3,
+    rest_axes: [Vec3; 3],
 }
 
 struct MaterialMeta {
@@ -114,6 +120,10 @@ enum PickPurpose {
     MeasureClick { free: bool },
     /// Snap indicator and rubber band under the cursor.
     MeasureHover { free: bool },
+    /// Move tool: lay the clicked face on the bed.
+    LayFace,
+    /// Move tool: the face under the cursor while choosing one to lay on the bed.
+    LayHover,
 }
 
 /// Blender-style selection: a set plus one active object.
@@ -211,7 +221,10 @@ impl Preload {
         let repaint = Arc::new(OnceLock::<egui::Context>::new());
         let (thread_path, thread_repaint) = (path.clone(), repaint.clone());
         std::thread::spawn(move || {
-            let _ = tx.send(loader::load(&thread_path));
+            let t = Instant::now();
+            let result = loader::load(&thread_path);
+            log::info!("startup: model read in {} ms", t.elapsed().as_millis());
+            let _ = tx.send(result);
             if let Some(ctx) = thread_repaint.get() {
                 ctx.request_repaint();
             }
@@ -230,6 +243,8 @@ struct Toast {
 
 pub struct ViewerApp {
     settings: Settings,
+    /// Manufacturing or 3D Art tools for the model on screen (see `Workspace`).
+    workspace: Workspace,
     /// Where the viewport toolbar was last drawn: the HUD chips, gizmo and channel strip move
     /// below it when the viewport is too narrow for them to share the top edge.
     toolbar_rect: Rect,
@@ -239,6 +254,8 @@ pub struct ViewerApp {
     loading: Option<Loading>,
     /// Mesh analysis of the loaded scene: totals plus marker instances per mesh.
     qa_rx: Option<Receiver<QaResult>>,
+    /// Answer of the daily "is there a newer release" check.
+    update_rx: Option<Receiver<Option<String>>>,
     /// Vertices per object for the Measure tool's snapping (arrives with the analysis).
     snap: Vec<snap::SnapMesh>,
     selection: Selection,
@@ -268,6 +285,14 @@ pub struct ViewerApp {
     measure_hover_px: Option<[u32; 2]>,
     /// Cross-section, when on.
     section: Option<Section>,
+    /// Move tool: per-object transform on top of the file's placement, its undo history, the
+    /// gizmo drag in progress, and whether the next click lays a face on the bed.
+    user_transforms: Vec<Mat4>,
+    transform_undo: Vec<Vec<Mat4>>,
+    transform_drag: Option<transform::Drag>,
+    lay_face_armed: bool,
+    lay_hover: Option<(Vec3, Vec3)>,
+    lay_hover_px: Option<[u32; 2]>,
     /// Second model for the A/B comparison, and one being loaded.
     compare: Option<compare::Compare>,
     compare_loading: Option<Loading>,
@@ -284,7 +309,7 @@ pub struct ViewerApp {
     show_prefs: bool,
     /// Turntable export window, and the encoding running in the background.
     show_turntable: bool,
-    turntable_job: Option<Receiver<Result<PathBuf, String>>>,
+    pub(super) turntable_job: Option<Receiver<Result<PathBuf, String>>>,
     applied_language: Option<Language>,
     /// Receives files from later launches while "Open files in the same window" is on.
     instance: Option<instance::Server>,
@@ -322,11 +347,14 @@ struct CaptureState {
 
 impl ViewerApp {
     pub fn new(cc: &eframe::CreationContext<'_>, launch: LaunchOptions, preload: Option<Preload>) -> Self {
+        crate::startup_mark("window and GPU ready");
         theme::apply(&cc.egui_ctx);
+        crate::startup_mark("theme and fonts");
         let mut settings: Settings = cc
             .storage
             .and_then(|s| eframe::get_value(s, eframe::APP_KEY))
             .unwrap_or_default();
+        settings.ensure_lights();
         // Every session starts from the default environment; picking another is a per-session look.
         settings.environment = settings.default_environment.clone();
         if let Some(c) = &launch.capture {
@@ -335,7 +363,9 @@ impl ViewerApp {
         let renderer = cc.wgpu_render_state.as_ref().map(|rs| {
             let info = rs.adapter.get_info();
             log::info!("GPU: {} ({:?}, {:?})", info.name, info.backend, info.device_type);
-            Renderer::new(&rs.device, &rs.queue)
+            let r = Renderer::new(&rs.device, &rs.queue);
+            crate::startup_mark("renderer");
+            r
         });
         let mut app = Self {
             settings,
@@ -345,6 +375,7 @@ impl ViewerApp {
             info: None,
             loading: None,
             qa_rx: None,
+            update_rx: None,
             snap: Vec::new(),
             selection: Selection::default(),
             visible: Vec::new(),
@@ -365,6 +396,13 @@ impl ViewerApp {
             measure_hover: None,
             measure_hover_px: None,
             section: None,
+            workspace: Workspace::Art,
+            user_transforms: Vec::new(),
+            transform_undo: Vec::new(),
+            transform_drag: None,
+            lay_face_armed: false,
+            lay_hover: None,
+            lay_hover_px: None,
             compare: None,
             compare_loading: None,
             env_image: None,
@@ -389,6 +427,8 @@ impl ViewerApp {
             snap_on_release: false,
             reveal: Reveal::Done,
         };
+        app.workspace = app.settings.workspace;
+        app.start_update_check();
         if RESTORE_MAXIMIZED.load(Ordering::Relaxed) && crate::cloak::set_cloaked(cc, true) {
             app.reveal = Reveal::Cloaked { painted: false, frames: 0 };
         }
@@ -445,7 +485,7 @@ impl ViewerApp {
                 .map(|e| format!(".{}", e.to_string_lossy()))
                 .unwrap_or_else(|| tr("This file").into());
             let text = trf(
-                "{ext} isn't supported yet. Supported: glTF, GLB, FBX, OBJ, STL, PLY, 3MF, DAE, and .hdr / .exr environments.",
+                "{ext} isn't supported yet. Supported: glTF, GLB, FBX, OBJ, STL, PLY, 3MF, DAE, STEP, and .hdr / .exr environments.",
                 &[("ext", &ext)],
             );
             self.show_toast(ctx, text, true);
@@ -477,6 +517,7 @@ impl ViewerApp {
             .add_filter("PLY", &["ply"])
             .add_filter("3MF", &["3mf"])
             .add_filter("COLLADA", &["dae"])
+            .add_filter("STEP", &["step", "stp"])
             .pick_file();
         if let Some(path) = picked {
             self.open(path, ctx);
@@ -493,7 +534,7 @@ impl ViewerApp {
         }
     }
 
-    fn export_image(&mut self, ctx: &egui::Context) {
+    pub(super) fn export_image(&mut self, ctx: &egui::Context) {
         let stem = self.info.as_ref().map_or("render".to_string(), |i| {
             Path::new(&i.file_name).file_stem().map_or(i.file_name.clone(), |s| s.to_string_lossy().into_owned())
         });
@@ -514,27 +555,60 @@ impl ViewerApp {
         ctx.request_repaint();
     }
 
-    /// Saves the current view as a PNG, without UI and selection outlines.
-    fn export_to(&mut self, path: &Path) -> Result<(), String> {
-        // 4x MSAA color + depth at 4096 px is already ~150 MB each; keep exports under that.
-        const MAX_SIDE: f32 = 4096.0;
+    pub(super) fn export_resolution_px(&self) -> [u32; 2] {
+        self.settings.render_resolution.dimensions(self.export_view_px(), self.settings.render_custom_w, self.settings.render_custom_h)
+    }
+
+    /// The whole view an export shows, in pixels: both halves of a side-by-side comparison.
+    pub(super) fn export_view_px(&self) -> [u32; 2] {
         let [w, h] = self.viewport_px;
-        let scale = (self.settings.export_scale.clamp(1, 4) as f32).min(MAX_SIDE / w.max(h).max(1) as f32);
-        let size = [(w as f32 * scale).round() as u32, (h as f32 * scale).round() as u32];
-        match self.render_offscreen(size, self.settings.export_transparent) {
-            Some(([w, h], pixels)) => image::save_buffer(path, &pixels, w, h, image::ColorType::Rgba8)
-                .map_err(|e| trf("Couldn't save the image: {error}", &[("error", &e)])),
+        match &self.compare {
+            Some(c) if c.mode == compare::CompareMode::SideBySide => [w * 2, h],
+            _ => [w, h],
+        }
+    }
+
+    /// Saves the current view as a PNG, with supersampling (SSAA) and chosen resolution.
+    fn export_to(&mut self, path: &Path) -> Result<(), String> {
+        let [target_w, target_h] = self.export_resolution_px();
+        let ssaa = self.settings.render_ssaa.clamp(1, 4);
+
+        // Render at supersampled resolution (up to 8192 px max texture dimension).
+        const MAX_SIDE: u32 = 8192;
+        let mut render_w = target_w * ssaa;
+        let mut render_h = target_h * ssaa;
+        if render_w > MAX_SIDE || render_h > MAX_SIDE {
+            let k = MAX_SIDE as f32 / (render_w.max(render_h) as f32);
+            render_w = (render_w as f32 * k).round() as u32;
+            render_h = (render_h as f32 * k).round() as u32;
+        }
+
+        let transparent = self.settings.export_transparent || self.settings.transparent_background;
+        match self.render_offscreen([render_w, render_h], transparent) {
+            Some(([w, h], pixels)) => {
+                if w != target_w || h != target_h {
+                    let img = image::RgbaImage::from_raw(w, h, pixels)
+                        .ok_or_else(|| tr("Couldn't render the image").to_string())?;
+                    let downsampled = image::imageops::resize(&img, target_w, target_h, image::imageops::FilterType::Lanczos3);
+                    downsampled.save(path)
+                        .map_err(|e| trf("Couldn't save the image: {error}", &[("error", &e)]))
+                } else {
+                    image::save_buffer(path, &pixels, w, h, image::ColorType::Rgba8)
+                        .map_err(|e| trf("Couldn't save the image: {error}", &[("error", &e)]))
+                }
+            }
             None => Err(tr("Couldn't render the image").to_string()),
         }
     }
 
     /// Renders the current view off screen, as an exported image looks: overlays per the
-    /// overlay switch, grid only if the export asks for it, no selection highlight.
+    /// overlay switch, grid only if the export asks for it, no selection highlight. With a
+    /// comparison open the image holds both models, as the viewport shows them: side by side,
+    /// or A and B across the Split divider with its gradient.
     fn render_offscreen(&mut self, size: [u32; 2], transparent: bool) -> Option<([u32; 2], Vec<u8>)> {
-        let section = self.section_plane();
-        let normal_length = self.normal_length();
-        let renderer = self.renderer.as_mut()?;
         let mut settings = self.settings.clone();
+        // Exports keep full quality (supersampling covers the missing MSAA).
+        settings.performance_mode = false;
         settings.show_grid = settings.show_overlays && settings.export_grid;
         settings.show_wire_overlay &= settings.show_overlays;
         settings.show_outline &= settings.show_overlays;
@@ -545,10 +619,71 @@ impl ViewerApp {
         settings.show_face_orientation &= settings.show_overlays;
         if transparent {
             settings.env_background = false;
+            settings.studio_backdrop = false;
+            settings.transparent_background = false;
         }
+        let Some(c) = &self.compare else {
+            return self.render_view_offscreen(false, size, &settings, transparent);
+        };
+        let (mode, split, gradient) = (c.mode, c.split, c.gradient);
+        let settings_b = c.settings_b(&settings);
+        let [w, h] = size;
+        match mode {
+            compare::CompareMode::SideBySide => {
+                let wa = (w / 2).max(1);
+                let wb = w.saturating_sub(wa).max(1);
+                let (_, a) = self.render_view_offscreen(false, [wa, h], &settings, transparent)?;
+                let (_, b) = self.render_view_offscreen(true, [wb, h], &settings_b, transparent)?;
+                let mut out = Vec::with_capacity(((wa + wb) * h * 4) as usize);
+                for y in 0..h as usize {
+                    out.extend_from_slice(&a[y * wa as usize * 4..(y + 1) * wa as usize * 4]);
+                    out.extend_from_slice(&b[y * wb as usize * 4..(y + 1) * wb as usize * 4]);
+                }
+                Some(([wa + wb, h], out))
+            }
+            compare::CompareMode::Split => {
+                let (_, mut a) = self.render_view_offscreen(false, size, &settings, transparent)?;
+                let (_, b) = self.render_view_offscreen(true, size, &settings_b, transparent)?;
+                // B's share per column, the same ramp the viewport draws across the divider.
+                let (t_min, t_max) = if gradient <= 0.001 {
+                    (split, split)
+                } else {
+                    let g = gradient.clamp(0.005, 0.45);
+                    ((split - g).clamp(0.0, 1.0), (split + g).clamp(0.0, 1.0))
+                };
+                let weights: Vec<u16> = (0..w)
+                    .map(|x| {
+                        let t = (x as f32 + 0.5) / w as f32;
+                        let k = if t_max > t_min { ((t - t_min) / (t_max - t_min)).clamp(0.0, 1.0) } else { (t >= split) as u8 as f32 };
+                        (k * 256.0).round() as u16
+                    })
+                    .collect();
+                for (row_a, row_b) in a.chunks_exact_mut(w as usize * 4).zip(b.chunks_exact(w as usize * 4)) {
+                    for (x, (pa, pb)) in row_a.chunks_exact_mut(4).zip(row_b.chunks_exact(4)).enumerate() {
+                        let k = weights[x];
+                        for ch in 0..4 {
+                            pa[ch] = ((pa[ch] as u16 * (256 - k) + pb[ch] as u16 * k + 128) >> 8) as u8;
+                        }
+                    }
+                }
+                Some((size, a))
+            }
+        }
+    }
+
+    /// One off-screen frame of model A, or of the comparison's model B, from the shared camera.
+    fn render_view_offscreen(&mut self, model_b: bool, size: [u32; 2], settings: &Settings, transparent: bool) -> Option<([u32; 2], Vec<u8>)> {
+        let section = self.section_plane();
+        let normal_length = self.normal_length();
+        let print_scale = self.print_scale();
+        // B is drawn without a scene frame, as in the viewport (its shadows fit model A).
+        let scene = if model_b { None } else { self.scene_frame() };
+        let renderer = if model_b { &mut self.compare.as_mut()?.renderer } else { self.renderer.as_mut()? };
         let (grid_cell, grid_fade, grid_axis) = grid_params(&self.camera);
         // Hide the selection; the next viewport frame sets it again.
-        renderer.set_selection(&vec![0; self.selection.selected.len()]);
+        if !model_b {
+            renderer.set_selection(&vec![0; self.selection.selected.len()]);
+        }
         let input = FrameInput {
             view: self.camera.view_matrix(),
             proj: self.camera.projection(size[0] as f32 / size[1] as f32),
@@ -558,11 +693,13 @@ impl ViewerApp {
             grid_cell,
             grid_fade,
             grid_axis,
-            settings: &settings,
+            settings,
             pick: None,
             transparent,
             section,
             normal_length,
+            print_scale,
+            scene,
         };
         renderer.render(None, size, &input);
         renderer.read_pixels()
@@ -611,6 +748,12 @@ impl ViewerApp {
                             ui.selectable_value(&mut s.language, lang, lang.label());
                         }
                     });
+                ui.checkbox(&mut s.auto_workspace, tr("Pick the workspace from the file type")).on_hover_text(tr(
+                    "STL, 3MF, STEP and PLY open in Manufacturing, the other formats in 3D Art. Off: the workspace you chose last",
+                ));
+                ui.checkbox(&mut s.check_updates, tr("Check for updates")).on_hover_text(tr(
+                    "Once a day, PolyLoupe asks GitHub whether a newer release exists. Nothing is downloaded or installed",
+                ));
                 ui.add_space(6.0);
                 widgets::section(ui, "Rendered");
                 let env_name = |e: &Environment| match e {
@@ -644,6 +787,14 @@ impl ViewerApp {
                 }
                 ui.add_space(6.0);
                 widgets::section(ui, "Viewport");
+                ui.horizontal(|ui| {
+                    ui.label(tr("Graphics"));
+                    widgets::segmented(ui, &mut s.performance_mode, &[(false, "Quality"), (true, "Performance")]);
+                })
+                .response
+                .on_hover_text(tr(
+                    "Performance: for integrated GPUs and older PCs. No anti-aliasing, the view at 100% scale on high-DPI screens, lighter shadows. Exported images keep full quality",
+                ));
                 ui.checkbox(&mut s.vsync, tr("V-Sync"))
                     .on_hover_text(tr("Off: frames aren't capped to the monitor refresh rate"));
                 ui.checkbox(&mut s.show_fps, tr("Frame rate"))
@@ -721,6 +872,7 @@ impl ViewerApp {
     /// Shows a freshly read model. `started` is when opening was asked for, so the "opened in"
     /// time covers reading, uploading and (at launch) setting up the window and the GPU.
     fn finish_loading(&mut self, ctx: &egui::Context, path: &Path, started: Instant, result: Result<Scene, String>) {
+        let result = result.and_then(|s| self.renderer.as_ref().map_or(Ok(()), |r| r.check_fits(&s)).map(|_| s));
         let mut scene = match result {
             Ok(scene) => scene,
             Err(err) => {
@@ -753,6 +905,9 @@ impl ViewerApp {
             }
         }
         let file_name = file_name(path);
+        if self.settings.auto_workspace {
+            self.workspace = Workspace::for_path(path);
+        }
         self.camera.reset(&scene.bounds);
         let info = scene_info(&scene, path, started.elapsed());
         let n = info.objects.len();
@@ -761,12 +916,18 @@ impl ViewerApp {
         self.cancel_measure();
         self.snap.clear();
         self.section = None;
+        self.user_transforms = vec![Mat4::IDENTITY; n];
+        self.transform_undo.clear();
+        self.transform_drag = None;
+        self.lay_face_armed = false;
         self.uv = None;
         self.uv_view.reset();
         self.visible = vec![true; n];
         self.pass_override = vec![None; n];
-        let missing_count = info.missing.len();
+        // Manufacturing ignores the file's textures, so missing ones aren't news.
+        let missing_count = if self.manufacturing() { 0 } else { info.missing.len() };
         self.info = Some(info);
+        self.apply_workspace();
         self.settings.push_recent(&path.to_string_lossy());
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{file_name} — {APP_NAME}")));
         // Missing textures get a banner with a fix; other warnings a plain toast.
@@ -800,6 +961,54 @@ impl ViewerApp {
                 (v, true)
             }
             None => (hit, false),
+        }
+    }
+
+    pub(super) fn manufacturing(&self) -> bool {
+        self.workspace == Workspace::Manufacturing
+    }
+
+    /// Switches workspace for the model on screen; the choice is also the one used when
+    /// "pick from the file type" is off.
+    pub(super) fn set_workspace(&mut self, workspace: Workspace) {
+        self.workspace = workspace;
+        self.settings.workspace = workspace;
+        self.apply_workspace();
+    }
+
+    /// Lengths and tools for the current workspace. Manufacturing shows millimeters, and reads
+    /// files without units (STL, STEP) as millimeters too; 3D Art keeps Blender's meters.
+    fn apply_workspace(&mut self) {
+        let undeclared = self.info.as_ref().is_some_and(|i| i.units == crate::scene::Units::Undeclared);
+        let manufacturing = self.manufacturing();
+        set_length_units(if manufacturing && undeclared { 0.001 } else { 1.0 }, manufacturing);
+        if manufacturing {
+            self.uv_view.open = false;
+            self.pass_override.fill(None);
+            // Texture and Attribute (vertex colors) are 3D Art channels.
+            if matches!(self.settings.color, ColorMode::Texture | ColorMode::Attribute) {
+                self.settings.color = ColorMode::Material;
+            }
+            if self.inspector_tab == InspectorTab::Materials {
+                self.inspector_tab = InspectorTab::Info;
+            }
+        } else if self.tool.transforms() {
+            self.tool = Tool::Select;
+        }
+    }
+
+    /// Where the visible model is, for the shadows and the shadow floor.
+    pub(super) fn scene_frame(&self) -> Option<render::SceneFrame> {
+        let b = self.visible_bounds(false);
+        b.is_valid().then(|| render::SceneFrame { center: b.center(), radius: (b.max - b.min).length() * 0.5, floor: b.min.z })
+    }
+
+    /// World units per millimeter for the print finish, 0 when it doesn't apply.
+    pub(super) fn print_scale(&self) -> f32 {
+        match self.info.as_ref().map(|i| i.units) {
+            _ if !self.manufacturing() => 0.0,
+            Some(crate::scene::Units::Undeclared) => 1.0,
+            _ => 0.001,
         }
     }
 
@@ -864,6 +1073,8 @@ impl ViewerApp {
         let Ok(QaResult { report, markers: instances, snap, uv }) = rx.try_recv() else { return };
         self.qa_rx = None;
         self.snap = snap;
+        // The user may have moved objects while the analysis ran.
+        self.transforms_changed(true);
         self.uv = Some(std::sync::Arc::new(uv));
         if let Some(r) = &mut self.renderer {
             r.set_markers(&instances);
@@ -1023,6 +1234,32 @@ impl ViewerApp {
         ctx.request_repaint_after(Duration::from_secs_f32(6.1));
     }
 
+    /// Once a day, in the background: is a newer release published?
+    fn start_update_check(&mut self) {
+        let today = update::today();
+        if !self.settings.check_updates || self.capture.is_some() || self.settings.last_update_check == today {
+            return;
+        }
+        self.settings.last_update_check = today;
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(update::newer_release());
+        });
+        self.update_rx = Some(rx);
+    }
+
+    fn poll_update(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.update_rx else { return };
+        match rx.try_recv() {
+            Ok(Some(version)) => {
+                self.update_rx = None;
+                self.show_banner(ctx, trf("PolyLoupe {version} is available", &[("version", &version)]), ToastAction::OpenReleases);
+            }
+            Ok(None) | Err(std::sync::mpsc::TryRecvError::Disconnected) => self.update_rx = None,
+            Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_secs(1)),
+        }
+    }
+
     fn show_banner(&mut self, ctx: &egui::Context, text: String, action: ToastAction) {
         log::warn!("{text}");
         let now = ctx.input(|i| i.time);
@@ -1125,8 +1362,18 @@ impl ViewerApp {
             return;
         }
         let pressed = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
-        for (key, tool) in [(Key::Q, Tool::Select), (Key::O, Tool::Orbit), (Key::G, Tool::Pan), (Key::M, Tool::Measure)] {
-            if pressed(Modifiers::NONE, key) {
+        self.transform_shortcuts(ctx);
+        let keys = [
+            (Key::Q, Tool::Select),
+            (Key::O, Tool::Orbit),
+            (Key::G, Tool::Pan),
+            (Key::M, Tool::Measure),
+            (Key::W, Tool::Move),
+            (Key::E, Tool::Rotate),
+            (Key::R, Tool::Scale),
+        ];
+        for (key, tool) in keys {
+            if pressed(Modifiers::NONE, key) && (!tool.transforms() || self.manufacturing()) {
                 self.tool = tool;
             }
         }
@@ -1165,16 +1412,29 @@ impl ViewerApp {
         if pressed(Modifiers::NONE, Key::C) {
             self.cycle_channel(true);
         }
-        if self.info.is_some() && pressed(Modifiers::NONE, Key::U) {
+        if self.info.is_some() && !self.manufacturing() && pressed(Modifiers::NONE, Key::U) {
             self.uv_view.open = !self.uv_view.open;
         }
-        // Measure: Esc drops the point being placed, Delete clears every measurement.
+        // Measure: Esc drops the point being placed, Delete (or Ctrl+Z) removes the last
+        // measurement, Shift+Delete clears them all.
         if self.measure_start.is_some() && pressed(Modifiers::NONE, Key::Escape) {
             self.cancel_measure();
         }
-        if !self.measures.is_empty() && (pressed(Modifiers::NONE, Key::Delete) || pressed(Modifiers::NONE, Key::Backspace)) {
-            self.measures.clear();
-            self.cancel_measure();
+        if !self.measures.is_empty() {
+            if pressed(Modifiers::SHIFT, Key::Delete) || pressed(Modifiers::SHIFT, Key::Backspace) {
+                self.measures.clear();
+                self.cancel_measure();
+            } else if pressed(Modifiers::NONE, Key::Delete) || pressed(Modifiers::NONE, Key::Backspace) {
+                self.measures.pop();
+            }
+        }
+        // Ctrl+Z: the last measurement with the Measure tool, otherwise the last move.
+        if pressed(Modifiers::COMMAND, Key::Z) {
+            if self.tool == Tool::Measure && !self.measures.is_empty() {
+                self.measures.pop();
+            } else if !self.undo_transform() {
+                self.measures.pop();
+            }
         }
         if pressed(Modifiers::SHIFT, Key::C) {
             self.cycle_channel(false);
@@ -1266,8 +1526,10 @@ impl ViewerApp {
         }
     }
 
-    fn navigate(&mut self, ui: &Ui, response: &egui::Response, viewport: Rect) {
+    /// `gizmo`: the pointer is on the Move tool's gizmo, so a click there doesn't select.
+    fn navigate(&mut self, ui: &Ui, response: &egui::Response, viewport: Rect, gizmo: bool) {
         let ppp = ui.ctx().pixels_per_point();
+        let render_ppp = self.render_ppp(ui.ctx());
         let (mods, scroll, pinch, dt) =
             ui.input(|i| (i.modifiers, i.smooth_scroll_delta, i.zoom_delta(), i.stable_dt.min(0.05)));
         let nav = self.settings.navigation;
@@ -1286,7 +1548,7 @@ impl ViewerApp {
             Tool::Orbit => Some(Gesture::Orbit),
             Tool::Pan => Some(Gesture::Pan),
             Tool::Zoom => Some(Gesture::Zoom),
-            Tool::Measure | Tool::Section => None,
+            Tool::Measure | Tool::Section | Tool::Move | Tool::Rotate | Tool::Scale => None,
         };
         // Section tool: a left drag slides the plane along its axis, following the axis
         // direction on screen.
@@ -1342,19 +1604,32 @@ impl ViewerApp {
             }
         }
         let to_px = |pos: Pos2| {
-            let p = (pos - viewport.min) * ppp;
+            let p = (pos - viewport.min) * render_ppp;
             [p.x.max(0.0) as u32, p.y.max(0.0) as u32]
         };
         // Click to select or place a measurement point (not with Alt, which is navigation in
         // most presets; not on a drag).
-        if response.clicked_by(PointerButton::Primary) && !mods.alt && self.info.is_some() {
+        if response.clicked_by(PointerButton::Primary) && !mods.alt && self.info.is_some() && !gizmo {
             if let Some(pos) = response.interact_pointer_pos() {
                 let purpose = if self.tool == Tool::Measure {
                     PickPurpose::MeasureClick { free: mods.ctrl }
+                } else if self.tool.transforms() && self.lay_face_armed {
+                    PickPurpose::LayFace
                 } else {
                     PickPurpose::Select { extend: mods.shift }
                 };
                 self.pending_pick = Some((to_px(pos), purpose));
+            }
+        } else if self.tool.transforms() && self.lay_face_armed && self.info.is_some() && self.pending_pick.is_none() {
+            // A --lay capture has no real pointer: keep its simulated one.
+            let simulated = self.capture.as_ref().is_some_and(|c| c.opts.lay_hover.is_some());
+            let hover = if simulated { self.lay_hover_px } else { response.hover_pos().map(to_px) };
+            if hover != self.lay_hover_px {
+                self.lay_hover_px = hover;
+                match hover {
+                    Some(p) => self.pending_pick = Some((p, PickPurpose::LayHover)),
+                    None => self.lay_hover = None,
+                }
             }
         } else if self.tool == Tool::Measure && self.info.is_some() && self.pending_pick.is_none() {
             // Follow the cursor with a pick only when it moves: each pick waits for the GPU.
@@ -1367,7 +1642,7 @@ impl ViewerApp {
                 }
             }
         }
-        if self.tool == Tool::Measure && response.hovered() {
+        if (self.tool == Tool::Measure || (self.tool.transforms() && self.lay_face_armed)) && response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         }
     }
@@ -1386,7 +1661,8 @@ impl ViewerApp {
             self.empty_state(ui, rect);
         } else {
             if !self.pie.is_open() {
-                self.navigate(ui, &response, rect);
+                let gizmo = self.transform_input(ui, &response, self.compare_rect_a(rect));
+                self.navigate(ui, &response, rect, gizmo);
             }
             let dt = ui.input(|i| i.stable_dt).min(0.05);
             if self.camera.update(dt) {
@@ -1398,13 +1674,17 @@ impl ViewerApp {
             self.draw_measures(ui, rect_a);
             self.draw_section(ui, rect_a);
             self.draw_origins(ui, rect_a);
+            self.draw_transform_gizmo(ui, rect_a);
+            self.draw_render_framing_guide(ui, rect_a);
+            self.draw_bounds_overlay(ui, rect_a);
+            self.draw_lights_overlay(ui, rect_a);
 
             let overlays = self.settings.show_overlays;
             if overlays {
                 self.hud(ui, rect);
             }
             let gizmo_shown = overlays && self.settings.show_gizmo;
-            if self.loading.is_none() {
+            if self.loading.is_none() && !self.manufacturing() {
                 self.channel_strip(&ctx, rect, gizmo_shown);
             }
             if gizmo_shown {
@@ -1420,6 +1700,7 @@ impl ViewerApp {
             }
             self.viewport_toolbar(&ctx, rect);
             self.section_bar(&ctx, rect);
+            self.transform_bar(&ctx, rect);
             self.compare_controls(ui, rect);
             if let Some(loading) = &self.loading {
                 shell::loading_overlay(ui, rect, &file_name(&loading.path));
@@ -1436,12 +1717,20 @@ impl ViewerApp {
         }
     }
 
+    /// Viewport pixels per UI point. Performance mode renders high-DPI screens at 100% scale
+    /// and lets the GPU upscale the image.
+    pub(super) fn render_ppp(&self, ctx: &egui::Context) -> f32 {
+        let ppp = ctx.pixels_per_point();
+        if self.settings.performance_mode { ppp.min(1.0) } else { ppp }
+    }
+
     /// Settings as the renderer should see them: the overlays switch hides every overlay.
     fn effective_settings(&self) -> Settings {
         let mut effective = self.settings.clone();
         if !effective.show_overlays {
             effective.show_grid = false;
             effective.show_wire_overlay = false;
+            effective.show_bounds_overlay = false;
             effective.show_outline = false;
             effective.show_non_manifold = false;
             effective.show_open_edges = false;
@@ -1456,11 +1745,15 @@ impl ViewerApp {
         let section = self.section_plane();
         let normal_length = self.normal_length();
         let effective = self.effective_settings();
+        let print_scale = self.print_scale();
+        let scene = self.scene_frame();
+        let ppp = self.render_ppp(ui.ctx());
+        let performance = self.settings.performance_mode;
         let (Some(renderer), Some(rs)) = (&mut self.renderer, frame.wgpu_render_state()) else {
             ui.painter().rect_filled(rect, 0.0, theme::VIEWPORT);
             return;
         };
-        let ppp = ui.ctx().pixels_per_point();
+        renderer.set_performance(performance);
         let size = [(rect.width() * ppp).round().max(1.0) as u32, (rect.height() * ppp).round().max(1.0) as u32];
         let aspect = size[0] as f32 / size[1] as f32;
 
@@ -1475,6 +1768,7 @@ impl ViewerApp {
             .collect();
         renderer.set_pass_overrides(&overrides);
         renderer.set_visibility(&self.visible);
+        renderer.set_user_transforms(&self.user_transforms);
 
         let pick = self.pending_pick.take();
         let input = FrameInput {
@@ -1491,6 +1785,8 @@ impl ViewerApp {
             transparent: false,
             section,
             normal_length,
+            print_scale,
+            scene,
         };
         let texture = {
             let mut egui_renderer = rs.renderer.write();
@@ -1502,7 +1798,7 @@ impl ViewerApp {
 
         let hit = renderer.picked.take();
         let point = renderer.picked_point.take().flatten();
-        let radius = snap::RADIUS_PX * ui.ctx().pixels_per_point();
+        let radius = snap::RADIUS_PX * self.render_ppp(ui.ctx());
         match (pick.map(|p| p.1), hit) {
             (Some(PickPurpose::Select { extend }), Some(hit)) => {
                 self.selection.click(hit, extend);
@@ -1525,6 +1821,14 @@ impl ViewerApp {
                 self.measure_hover = point.map(|p| self.snap_point(hit.flatten(), p, px, free, radius));
                 ui.ctx().request_repaint();
             }
+            (Some(PickPurpose::LayFace), _) => {
+                self.lay_on_picked_face(ui.ctx(), hit.flatten(), point);
+                ui.ctx().request_repaint();
+            }
+            (Some(PickPurpose::LayHover), _) => {
+                self.lay_hover_at(hit.flatten(), point);
+                ui.ctx().request_repaint();
+            }
             _ => {}
         }
     }
@@ -1545,8 +1849,8 @@ impl ViewerApp {
             }
             return;
         }
-        // Hold the shot until the mesh analysis (and model B) are in.
-        if cap.frames > 2 && (self.qa_rx.is_some() || self.compare_loading.is_some()) {
+        // Hold the shot until the model, mesh analysis (and model B) are in.
+        if cap.frames > 2 && (self.loading.is_some() || self.qa_rx.is_some() || self.compare_loading.is_some()) {
             return;
         }
         if cap.opts.compare_split {
@@ -1555,6 +1859,34 @@ impl ViewerApp {
             }
         }
         cap.frames += 1;
+        // Move tool steps run once the mesh analysis is in (frame 3 waits for it).
+        let (frames, rotate, auto_orient, export_model, lay_hover) =
+            (cap.frames, cap.opts.rotate, cap.opts.auto_orient, cap.opts.export_model.clone(), cap.opts.lay_hover);
+        if let (4, Some(p)) = (frames, lay_hover) {
+            self.tool = Tool::Move;
+            self.lay_face_armed = true;
+            self.lay_hover_px = Some(p);
+            self.pending_pick = Some((p, PickPurpose::LayHover));
+        }
+        if frames == 3 {
+            if let Some([x, y, z]) = rotate {
+                let r = Mat4::from_euler(glam::EulerRot::XYZ, x.to_radians(), y.to_radians(), z.to_radians());
+                for i in self.transform_targets() {
+                    self.user_transforms[i] = r * self.user_transforms[i];
+                }
+                self.transforms_changed(true);
+            }
+        }
+        if frames == 4 && auto_orient {
+            self.auto_orient(ctx);
+        }
+        if let (5, Some(out)) = (frames, export_model) {
+            match self.export_model_to(&out) {
+                Ok(()) => println!("exported {}", out.display()),
+                Err(e) => eprintln!("export failed: {e}"),
+            }
+        }
+        let Some(cap) = &mut self.capture else { return };
         if let (4, Some([_, b])) = (cap.frames, cap.opts.measure) {
             self.pending_pick = Some((b, PickPurpose::MeasureClick { free: false }));
         }
@@ -1579,10 +1911,20 @@ impl ViewerApp {
                     self.settings.show_sidebar = true;
                     self.inspector_tab = InspectorTab::Shading;
                 }
+                Some("render") => {
+                    self.settings.show_sidebar = true;
+                    self.inspector_tab = InspectorTab::Render;
+                }
                 _ => {}
             }
             if cap.opts.pie {
                 self.pie.open(ctx.content_rect().center(), ctx.input(|i| i.time));
+            }
+            match cap.opts.tool.as_deref() {
+                Some("move") => self.tool = Tool::Move,
+                Some("rotate") => self.tool = Tool::Rotate,
+                Some("scale") => self.tool = Tool::Scale,
+                _ => {}
             }
             if cap.opts.uv {
                 self.uv_view.open = true;
@@ -1690,6 +2032,7 @@ impl eframe::App for ViewerApp {
         }
         self.poll_loading(&ctx);
         self.poll_qa();
+        self.poll_update(&ctx);
         self.poll_compare(&ctx, frame);
         self.poll_turntable(&ctx);
         self.update_environment(&ctx);
@@ -1754,7 +2097,7 @@ impl eframe::App for ViewerApp {
             egui::Panel::right("inspector")
                 .resizable(true)
                 .default_size(shell::INSPECTOR_WIDTH)
-                .size_range(280.0..=480.0)
+                .size_range(340.0..=520.0)
                 .frame(Frame::new().fill(theme::PANEL))
                 .show(ui, |ui| self.inspector(ui));
         }
@@ -1814,19 +2157,25 @@ fn scene_info(scene: &Scene, path: &Path, load_time: Duration) -> SceneInfo {
         objects: scene
             .meshes
             .iter()
-            .map(|m| ObjectMeta {
-                name: m.name.clone(),
-                triangles: m.triangle_count(),
-                vertices: m.positions.len(),
-                bounds: m.bounds.transformed(&m.transform),
-                material: m.material.min(scene.materials.len() - 1),
-                origin: m.transform.w_axis.truncate(),
-                axes: {
-                    // Undo the file's up-axis conversion so an unrotated object shows X, Y, Z
-                    // like the navigation gizmo (and Blender), not its Y-up file axes.
-                    let t = m.transform * Mat4::from_quat(scene.axis_conversion.inverse());
-                    [t.x_axis, t.y_axis, t.z_axis].map(|a| a.truncate().normalize_or_zero())
-                },
+            .map(|m| {
+                let bounds = m.bounds.transformed(&m.transform);
+                let origin = m.transform.w_axis.truncate();
+                // Undo the file's up-axis conversion so an unrotated object shows X, Y, Z like
+                // the navigation gizmo (and Blender), not its Y-up file axes.
+                let t = m.transform * Mat4::from_quat(scene.axis_conversion.inverse());
+                let axes = [t.x_axis, t.y_axis, t.z_axis].map(|a| a.truncate().normalize_or_zero());
+                ObjectMeta {
+                    name: m.name.clone(),
+                    triangles: m.triangle_count(),
+                    vertices: m.positions.len(),
+                    bounds,
+                    material: m.material.min(scene.materials.len() - 1),
+                    origin,
+                    axes,
+                    rest_bounds: bounds,
+                    rest_origin: origin,
+                    rest_axes: axes,
+                }
             })
             .collect(),
         vertices: scene.source_vertex_count,
@@ -1847,7 +2196,7 @@ fn spawn_analysis(scene: Scene, ctx: &egui::Context) -> Receiver<QaResult> {
         log::info!("mesh analysis in {:?}: {report:?}", started.elapsed());
         let markers = scene.meshes.iter().zip(&marks).map(|(m, k)| render::marker_instances(m, k)).collect();
         let uv = crate::uv::extract(&scene.meshes, &scene.materials, &scene.images);
-        let snap = scene.meshes.into_iter().map(|m| snap::SnapMesh::new(m.transform, m.positions)).collect();
+        let snap = scene.meshes.into_iter().map(|m| snap::SnapMesh::new(m.transform, m.positions, m.indices)).collect();
         if tx.send(QaResult { report, markers, snap, uv }).is_ok() {
             ctx.request_repaint();
         }
@@ -1876,8 +2225,32 @@ fn file_name(path: &Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
-/// Formats a length in meters (1 unit = 1 m, like Blender) with a readable unit.
-fn fmt_len(m: f32) -> String {
+/// Meters per world unit (bits of an f32) and whether lengths always show in millimeters:
+/// set per model by `apply_workspace`.
+static METERS_PER_UNIT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3f80_0000);
+static PREFER_MM: AtomicBool = AtomicBool::new(false);
+
+fn set_length_units(meters_per_unit: f32, millimeters: bool) {
+    METERS_PER_UNIT.store(meters_per_unit.to_bits(), Ordering::Relaxed);
+    PREFER_MM.store(millimeters, Ordering::Relaxed);
+}
+
+fn meters_per_unit() -> f32 {
+    f32::from_bits(METERS_PER_UNIT.load(Ordering::Relaxed))
+}
+
+/// Formats a length in world units (1 unit = 1 m like Blender, or 1 mm for unitless files in
+/// the Manufacturing workspace) with a readable unit; millimeters in Manufacturing.
+fn fmt_len(units: f32) -> String {
+    let m = units * meters_per_unit();
+    if PREFER_MM.load(Ordering::Relaxed) {
+        let mm = m * 1000.0;
+        let decimals = if mm.abs() >= 100.0 { 1 } else { 2 };
+        let text = format!("{mm:.decimals$}");
+        let text = if text.contains('.') { text.trim_end_matches('0').trim_end_matches('.').to_string() } else { text };
+        let text = if text == "-0" { "0".to_string() } else { text };
+        return format!("{text} mm");
+    }
     let a = m.abs();
     let (value, unit) = if a >= 1000.0 {
         (m / 1000.0, "km")

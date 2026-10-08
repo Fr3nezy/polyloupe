@@ -12,7 +12,7 @@ use crate::scene::{
     MeshData, MeshRig, MorphTarget, Node, Property, Scene, Skin, unique_edges, y_up_to_z_up,
 };
 
-pub const SUPPORTED_EXTENSIONS: &[&str] = &["glb", "gltf", "fbx", "obj", "stl", "ply", "3mf", "dae"];
+pub const SUPPORTED_EXTENSIONS: &[&str] = &["glb", "gltf", "fbx", "obj", "stl", "ply", "3mf", "dae", "step", "stp"];
 pub const ENVIRONMENT_EXTENSIONS: &[&str] = &["hdr", "exr"];
 
 pub fn is_supported(path: &Path) -> bool {
@@ -43,6 +43,7 @@ pub fn load_with(path: &Path, texture_dirs: &[PathBuf]) -> Result<Scene, String>
         Some("ply") => crate::formats::ply::load(path),
         Some("3mf") => crate::formats::threemf::load(path),
         Some("dae") => crate::formats::collada::load(path, texture_dirs),
+        Some("step" | "stp") => crate::formats::step::load(path),
         Some(other) => Err(format!(".{other} files aren't supported yet")),
         None => Err("The file has no extension, so its format is unknown".into()),
     }?;
@@ -198,7 +199,7 @@ fn missing_image(name: &str) -> Image {
 }
 
 /// Box-filtered mip chain down to 1x1.
-fn build_mips(width: u32, height: u32, level0: Vec<u8>) -> Vec<Vec<u8>> {
+pub fn build_mips(width: u32, height: u32, level0: Vec<u8>) -> Vec<Vec<u8>> {
     let mut mips = vec![level0];
     let (mut w, mut h) = (width as usize, height as usize);
     while w > 1 || h > 1 {
@@ -254,7 +255,7 @@ fn percent_decode(s: &str) -> String {
 /// - animation channels without a target node (`KHR_animation_pointer`) are dropped;
 /// - textures whose image only comes from an extension (`EXT_texture_webp`, `KHR_texture_basisu`,
 ///   ...) get that image as their source; ones we can't decode fail like any bad texture.
-fn open_gltf(path: &Path) -> Result<(gltf::Document, Option<Vec<u8>>, Vec<String>), String> {
+fn open_gltf(path: &Path) -> Result<(gltf::Document, Option<Vec<u8>>, Vec<String>, serde_json::Value), String> {
     let invalid = |e: &dyn std::fmt::Display| format!("Invalid glTF: {e}");
     let bytes = std::fs::read(path).map_err(|e| invalid(&e))?;
     let (json, blob) = if bytes.starts_with(b"glTF") {
@@ -303,7 +304,7 @@ fn open_gltf(path: &Path) -> Result<(gltf::Document, Option<Vec<u8>>, Vec<String
         }
     }
 
-    let root: gltf::json::Root = serde_json::from_value(value).map_err(|e| invalid(&e))?;
+    let root: gltf::json::Root = serde_json::from_value(value.clone()).map_err(|e| invalid(&e))?;
     // Accessors without a bufferView are valid glTF (all zeros), and Draco / meshopt meshes are
     // made of them, but the gltf crate reports them as missing data. When those are the only
     // errors, load anyway: their primitives read no positions and are skipped.
@@ -320,13 +321,15 @@ fn open_gltf(path: &Path) -> Result<(gltf::Document, Option<Vec<u8>>, Vec<String
         Err(e) => return Err(invalid(&e)),
     };
     let mut warnings = Vec::new();
+    let supported_extra = ["KHR_materials_clearcoat", "KHR_materials_transmission", "KHR_materials_specular", "KHR_materials_ior", "KHR_materials_emissive_strength"];
+    unknown.retain(|u| !supported_extra.contains(&u.as_str()));
     if !unknown.is_empty() {
         warnings.push(trf(
             "Unsupported glTF extensions ({list}): the model may look wrong or be incomplete",
             &[("list", &unknown.join(", "))],
         ));
     }
-    Ok((doc, blob, warnings))
+    Ok((doc, blob, warnings, value))
 }
 
 /// Indices of a triangle strip or fan as a plain triangle list, keeping the winding of every
@@ -350,7 +353,7 @@ fn triangle_list(mode: gltf::mesh::Mode, indices: Vec<u32>) -> Vec<u32> {
 fn load_gltf(path: &Path, texture_dirs: &[PathBuf]) -> Result<Scene, String> {
     use base64::Engine;
 
-    let (doc, blob, mut warnings) = open_gltf(path)?;
+    let (doc, blob, mut warnings, raw_json) = open_gltf(path)?;
     let doc = &doc;
     let base = path.parent().unwrap_or(Path::new("."));
     let buffers = gltf::import_buffers(doc, Some(base), blob)
@@ -401,6 +404,28 @@ fn load_gltf(path: &Path, texture_dirs: &[PathBuf]) -> Result<Scene, String> {
             let pbr = m.pbr_metallic_roughness();
             let mr = pbr.metallic_roughness_texture().map(|i| tex_image(i.texture()));
             let e = m.emissive_factor();
+            let (clearcoat, clearcoat_roughness, transmission, ior) = if let Some(exts) = m.index().and_then(|idx| {
+                raw_json
+                    .get("materials")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.get(idx))
+                    .and_then(|v| v.get("extensions"))
+            }) {
+                let cc = exts.get("KHR_materials_clearcoat");
+                let cc_factor = cc.and_then(|c| c.get("clearcoatFactor")).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                let cc_rough = cc.and_then(|c| c.get("clearcoatRoughnessFactor")).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                let tr = exts.get("KHR_materials_transmission")
+                    .and_then(|t| t.get("transmissionFactor"))
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0) as f32;
+                let ior_val = exts.get("KHR_materials_ior")
+                    .and_then(|i| i.get("ior"))
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(1.5) as f32;
+                (cc_factor, cc_rough, tr, ior_val)
+            } else {
+                (0.0, 0.0, 0.0, 1.5)
+            };
             Material {
                 name: m.name().unwrap_or("Material").to_string(),
                 base_color: pbr.base_color_factor(),
@@ -410,7 +435,13 @@ fn load_gltf(path: &Path, texture_dirs: &[PathBuf]) -> Result<Scene, String> {
                 normal_scale: m.normal_texture().map_or(1.0, |n| n.scale()),
                 occlusion_strength: m.occlusion_texture().map_or(1.0, |o| o.strength()),
                 alpha_mode: match m.alpha_mode() {
-                    gltf::material::AlphaMode::Opaque => AlphaMode::Opaque,
+                    gltf::material::AlphaMode::Opaque => {
+                        if transmission > 0.0 {
+                            AlphaMode::Blend
+                        } else {
+                            AlphaMode::Opaque
+                        }
+                    }
                     gltf::material::AlphaMode::Mask => AlphaMode::Mask(m.alpha_cutoff().unwrap_or(0.5)),
                     gltf::material::AlphaMode::Blend => AlphaMode::Blend,
                 },
@@ -423,6 +454,10 @@ fn load_gltf(path: &Path, texture_dirs: &[PathBuf]) -> Result<Scene, String> {
                 occlusion_tex: m
                     .occlusion_texture()
                     .map(|o| ChannelTex { image: tex_image(o.texture()), channel: 0 }),
+                clearcoat,
+                clearcoat_roughness,
+                transmission,
+                ior,
             }
         })
         .collect();
@@ -769,6 +804,10 @@ fn load_ufbx(path: &Path, texture_dirs: &[PathBuf]) -> Result<Scene, String> {
             metallic_tex: channel(map_texture(&pbr.metalness), &mut resolve_texture),
             roughness_tex: channel(map_texture(&pbr.roughness), &mut resolve_texture),
             occlusion_tex: channel(map_texture(&pbr.ambient_occlusion), &mut resolve_texture),
+            clearcoat: 0.0,
+            clearcoat_roughness: 0.0,
+            transmission: 0.0,
+            ior: 1.5,
         };
         // In FBX/OBJ (unlike glTF) a connected texture replaces the scalar value.
         let mut material = material;

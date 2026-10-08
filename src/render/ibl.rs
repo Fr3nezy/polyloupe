@@ -8,9 +8,9 @@ use crate::loader::EnvImage;
 pub const SRC_WIDTH: u32 = 2048;
 pub const SRC_HEIGHT: u32 = 1024;
 const SRC_MIPS: u32 = 11; // 2048 -> 1
-const SPEC_WIDTH: u32 = 512;
-const SPEC_HEIGHT: u32 = 256;
-pub const SPEC_MIPS: u32 = 6;
+const SPEC_WIDTH: u32 = 1024;
+const SPEC_HEIGHT: u32 = 512;
+pub const SPEC_MIPS: u32 = 7;
 const IRR_WIDTH: u32 = 64;
 const IRR_HEIGHT: u32 = 32;
 const LUT_SIZE: u32 = 128;

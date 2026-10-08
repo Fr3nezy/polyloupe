@@ -9,7 +9,7 @@
 ; own inside Windows' isolated thumbnail process, with no GPU; .gltf and .obj go through a second
 ; class that gets the file's path and runs polyloupe.exe --thumbnail (see thumbnailer/src/lib.rs).
 
-#define AppVersion "0.1.2"
+#define AppVersion "0.2.0"
 
 [Setup]
 AppId={{24342D06-700F-425F-BDEF-C297766C9278}
@@ -57,6 +57,8 @@ italian.Launch=Avvia PolyLoupe
 [Files]
 Source: "..\target\release\polyloupe.exe"; DestDir: "{app}"; Flags: ignoreversion uninsrestartdelete
 Source: "..\target\release\polyloupe_thumbs.dll"; DestDir: "{app}"; Flags: ignoreversion uninsrestartdelete
+; OpenCASCADE STEP reader, loaded by polyloupe.exe only when a STEP file is opened.
+Source: "..\target\release\polyloupe_step.dll"; DestDir: "{app}"; Flags: ignoreversion uninsrestartdelete
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 Source: "..\target\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -80,6 +82,8 @@ Root: HKLM; Subkey: "Software\Classes\.stl\OpenWithProgids"; ValueType: string; 
 Root: HKLM; Subkey: "Software\Classes\.ply\OpenWithProgids"; ValueType: string; ValueName: "PolyLoupe.Model"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\.3mf\OpenWithProgids"; ValueType: string; ValueName: "PolyLoupe.Model"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\.dae\OpenWithProgids"; ValueType: string; ValueName: "PolyLoupe.Model"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKLM; Subkey: "Software\Classes\.step\OpenWithProgids"; ValueType: string; ValueName: "PolyLoupe.Model"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKLM; Subkey: "Software\Classes\.stp\OpenWithProgids"; ValueType: string; ValueName: "PolyLoupe.Model"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\SupportedTypes"; ValueType: string; ValueName: ".glb"; ValueData: ""
 Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\SupportedTypes"; ValueType: string; ValueName: ".gltf"; ValueData: ""
 Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\SupportedTypes"; ValueType: string; ValueName: ".fbx"; ValueData: ""
@@ -88,6 +92,8 @@ Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\SupportedTypes"
 Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\SupportedTypes"; ValueType: string; ValueName: ".ply"; ValueData: ""
 Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\SupportedTypes"; ValueType: string; ValueName: ".3mf"; ValueData: ""
 Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\SupportedTypes"; ValueType: string; ValueName: ".dae"; ValueData: ""
+Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\SupportedTypes"; ValueType: string; ValueName: ".step"; ValueData: ""
+Root: HKLM; Subkey: "Software\Classes\Applications\polyloupe.exe\SupportedTypes"; ValueType: string; ValueName: ".stp"; ValueData: ""
 Root: HKLM; Subkey: "Software\PolyLoupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".glb"; ValueData: "PolyLoupe.Model"
 Root: HKLM; Subkey: "Software\PolyLoupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".gltf"; ValueData: "PolyLoupe.Model"
 Root: HKLM; Subkey: "Software\PolyLoupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".fbx"; ValueData: "PolyLoupe.Model"
@@ -96,6 +102,8 @@ Root: HKLM; Subkey: "Software\PolyLoupe\Capabilities\FileAssociations"; ValueTyp
 Root: HKLM; Subkey: "Software\PolyLoupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".ply"; ValueData: "PolyLoupe.Model"
 Root: HKLM; Subkey: "Software\PolyLoupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".3mf"; ValueData: "PolyLoupe.Model"
 Root: HKLM; Subkey: "Software\PolyLoupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".dae"; ValueData: "PolyLoupe.Model"
+Root: HKLM; Subkey: "Software\PolyLoupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".step"; ValueData: "PolyLoupe.Model"
+Root: HKLM; Subkey: "Software\PolyLoupe\Capabilities\FileAssociations"; ValueType: string; ValueName: ".stp"; ValueData: "PolyLoupe.Model"
 
 ; Leftovers of the builds named "Poly Loupe" (with a space).
 Root: HKLM; Subkey: "Software\Poly Loupe"; ValueType: none; Flags: deletekey
@@ -154,6 +162,9 @@ begin
     end;
   end;
   Dll := Dir + '\polyloupe_thumbs.dll';
+  if FileExists(Dll) and not DeleteFile(Dll) then
+    RenameFile(Dll, Dll + '.' + GetDateTimeString('yyyymmddhhnnss', #0, #0) + '.old');
+  Dll := Dir + '\polyloupe_step.dll';
   if FileExists(Dll) and not DeleteFile(Dll) then
     RenameFile(Dll, Dll + '.' + GetDateTimeString('yyyymmddhhnnss', #0, #0) + '.old');
   Dll := Dir + '\polyloupe.exe';

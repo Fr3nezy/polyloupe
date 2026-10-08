@@ -1,0 +1,18 @@
+[package]
+name = "polyloupe-step"
+version = "0.2.0"
+edition = "2024"
+description = "STEP reader for PolyLoupe: OpenCASCADE in a DLL loaded only when a STEP file is opened"
+license = "GPL-3.0-or-later"
+
+[lib]
+name = "polyloupe_step"
+crate-type = ["cdylib"]
+
+[dependencies]
+# OpenCASCADE built from the official sources (feature `source`), never a downloaded binary.
+# `color` keeps STEP face and solid colors; `png` (a preview renderer) isn't needed.
+cadrum = { version = "0.8.20", default-features = false, features = ["color", "source"] }
+
+[build-dependencies]
+cc = "1"

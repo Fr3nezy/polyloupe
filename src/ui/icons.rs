@@ -230,6 +230,49 @@ pub fn move_arrows(p: &Painter, rect: Rect, color: Color32) {
     }
 }
 
+/// Rotate tool: a circular arrow.
+pub fn rotate(p: &Painter, rect: Rect, color: Color32) {
+    let g = grid(rect, 18.0);
+    let s = stroke_for(rect, 18.0, 1.5, color);
+    let k = rect.width().min(rect.height()) / 18.0;
+    let c = g(9.0, 9.0);
+    // Three quarters of a circle, open at the top right, with the arrow head on its end.
+    let arc: Vec<Pos2> = (0..=24)
+        .map(|i| {
+            let a = -TAU * 0.18 + i as f32 / 24.0 * TAU * 0.78;
+            c + vec2(a.cos(), a.sin()) * 6.0 * k
+        })
+        .collect();
+    let end = *arc.last().unwrap();
+    p.add(Shape::line(arc, s));
+    let a = -TAU * 0.18 + TAU * 0.78;
+    let tangent = vec2(-a.sin(), a.cos());
+    let normal = vec2(a.cos(), a.sin());
+    polyline(p, vec![end - tangent * 3.0 * k + normal * 2.6 * k, end + tangent * 0.6 * k, end - tangent * 3.0 * k - normal * 2.6 * k], false, s);
+    p.circle_filled(c, 1.3 * k, color);
+}
+
+/// Scale tool: a small square in the corner of a big one, with a diagonal arrow out of it.
+pub fn scale(p: &Painter, rect: Rect, color: Color32) {
+    let g = grid(rect, 18.0);
+    let s = stroke_for(rect, 18.0, 1.5, color);
+    polyline(p, vec![g(2.5, 8.0), g(2.5, 15.5), g(10.0, 15.5)], false, s);
+    p.add(Shape::closed_line(vec![g(2.5, 10.5), g(7.5, 10.5), g(7.5, 15.5), g(2.5, 15.5)], s));
+    polyline(p, vec![g(10.0, 2.5), g(15.5, 2.5), g(15.5, 8.0)], false, s);
+    p.line_segment([g(7.5, 10.5), g(15.5, 2.5)], s);
+}
+
+/// Pan: an open hand.
+pub fn hand(p: &Painter, rect: Rect, color: Color32) {
+    let g = grid(rect, 18.0);
+    let s = stroke_for(rect, 18.0, 1.4, color);
+    // Four fingers, the thumb, and the palm's outline joining them.
+    for (x, top) in [(6.0, 4.0), (8.5, 2.5), (11.0, 3.0), (13.5, 5.0)] {
+        p.line_segment([g(x, top), g(x, 10.0)], s);
+    }
+    polyline(p, vec![g(6.0, 10.0), g(4.8, 9.0), g(3.2, 9.4), g(3.6, 11.0), g(6.0, 14.6), g(8.0, 16.0), g(12.0, 16.0), g(13.5, 13.5), g(13.5, 10.0)], false, s);
+}
+
 /// Zoom tool: magnifier with a plus.
 /// A/B side by side: two frames.
 pub fn compare_side(p: &Painter, rect: Rect, color: Color32) {
@@ -309,6 +352,25 @@ pub fn cube_line(p: &Painter, rect: Rect, color: Color32) {
     polyline(p, vec![g(7.0, 1.5), g(12.0, 4.3), g(12.0, 9.7), g(7.0, 12.5), g(2.0, 9.7), g(2.0, 4.3)], true, s);
     polyline(p, vec![g(2.0, 4.3), g(7.0, 7.1), g(12.0, 4.3)], false, s);
     p.line_segment([g(7.0, 7.1), g(7.0, 12.5)], s);
+}
+
+/// Manufacturing workspace: a hex nut.
+pub fn manufacturing(p: &Painter, rect: Rect, color: Color32) {
+    let g = grid(rect, 16.0);
+    let s = stroke_for(rect, 16.0, 1.4, color);
+    let k = rect.width().min(rect.height()) / 16.0;
+    polyline(p, vec![g(8.0, 1.5), g(14.0, 4.75), g(14.0, 11.25), g(8.0, 14.5), g(2.0, 11.25), g(2.0, 4.75)], true, s);
+    p.circle_stroke(g(8.0, 8.0), 2.6 * k, s);
+}
+
+/// 3D Art workspace: a paintbrush, tilted: handle, metal ferrule, and the bristles bending to a
+/// point, filled so it weighs as much as the Manufacturing nut next to it.
+pub fn art(p: &Painter, rect: Rect, color: Color32) {
+    let g = grid(rect, 16.0);
+    let s = stroke_for(rect, 16.0, 2.2, color);
+    p.line_segment([g(14.6, 1.4), g(10.0, 6.0)], s);
+    p.add(Shape::convex_polygon(vec![g(9.4, 4.8), g(11.2, 6.6), g(8.8, 9.0), g(7.0, 7.2)], color, Stroke::NONE));
+    p.add(Shape::convex_polygon(vec![g(6.6, 7.4), g(8.6, 9.4), g(7.6, 12.2), g(5.0, 14.0), g(1.2, 14.8), g(2.0, 11.0), g(3.8, 8.4)], color, Stroke::NONE));
 }
 
 /// Warning triangle.

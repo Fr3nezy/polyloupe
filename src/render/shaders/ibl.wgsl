@@ -86,8 +86,11 @@ const SPEC_SAMPLES: u32 = 96u;
 
 @fragment
 fn fs_prefilter(in: FullOut) -> @location(0) vec4<f32> {
-    let n = dir_from_uv(in.uv);
     let rough = params.v.x;
+    if rough <= 0.02 {
+        return textureSampleLevel(src, samp, in.uv, 0.0);
+    }
+    let n = dir_from_uv(in.uv);
     let a = rough * rough;
     let tbn = basis(n);
     // Solid angle of one source texel (equirect average).

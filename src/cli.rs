@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use crate::camera::AxisView;
 use crate::render::environment::Preset;
-use crate::settings::{ColorMode, Environment, Lighting, Settings, ShadingMode, TexturePass};
+use crate::settings::{ColorMode, Environment, Lighting, Settings, ShadingMode, TexturePass, Workspace};
 
 #[derive(Default)]
 pub struct LaunchOptions {
@@ -48,6 +48,14 @@ pub struct CaptureOptions {
     /// Also runs File > Export Image to this path (with the export preferences).
     pub export: Option<PathBuf>,
     pub frame: Option<i32>,
+    /// Move tool: switch to it, rotate the selection (degrees about X, Y, Z), lay it on its
+    /// best side, and save the result as STL/3MF.
+    pub tool: Option<String>,
+    pub rotate: Option<[f32; 3]>,
+    pub auto_orient: bool,
+    pub export_model: Option<PathBuf>,
+    /// Lay on face, choosing: the cursor at these viewport pixels.
+    pub lay_hover: Option<[u32; 2]>,
     settings: Vec<(String, Option<String>)>,
 }
 
@@ -79,6 +87,25 @@ impl CaptureOptions {
                         _ => ColorMode::Material,
                     }
                 }
+                "--workspace" => {
+                    s.auto_workspace = false;
+                    s.workspace = if v.starts_with('m') { Workspace::Manufacturing } else { Workspace::Art };
+                }
+                "--file-materials" => s.file_materials = true,
+                "--grain" => s.grain = v.parse().unwrap_or(0.3),
+                "--scratches" => s.scratches = v.parse().unwrap_or(0.5),
+                "--material" => {
+                    use crate::settings::{MetalFinish, PartMaterial};
+                    let all = [PartMaterial::Pla, PartMaterial::PlaSilk, PartMaterial::Petg, PartMaterial::Abs, PartMaterial::Resin, PartMaterial::Nylon, PartMaterial::Metal];
+                    if let Some(m) = all.into_iter().find(|m| m.label().replace(' ', "").eq_ignore_ascii_case(&v.replace(['-', '_'], ""))) {
+                        s.material = m;
+                        s.layer_height = m.layer_height().max(0.05);
+                    }
+                    if let Some(f) = MetalFinish::ALL.into_iter().find(|f| f.label().eq_ignore_ascii_case(v)) {
+                        s.material = PartMaterial::Metal;
+                        s.metal_finish = f;
+                    }
+                }
                 "--matcap" => s.matcap = v.parse().unwrap_or(0),
                 "--pass" => {
                     s.color = ColorMode::Texture;
@@ -93,6 +120,11 @@ impl CaptureOptions {
                     }
                 }
                 "--env-bg" => s.env_background = true,
+                "--studio" => s.studio_backdrop = true,
+                "--no-shadows" => {
+                    s.shadows = false;
+                    s.floor_shadow = false;
+                }
                 "--export-scale" => s.export_scale = v.parse().unwrap_or(2),
                 "--budget" => s.triangle_budget = v.parse().unwrap_or(0),
                 "--up" => {
@@ -104,7 +136,10 @@ impl CaptureOptions {
                         .find(|n| format!("{n:?}").eq_ignore_ascii_case(v))
                         .unwrap_or(s.navigation)
                 }
-                "--transparent" => s.export_transparent = true,
+                "--transparent" => {
+                    s.export_transparent = true;
+                    s.transparent_background = true;
+                }
                 "--sidebar" => s.show_sidebar = true,
                 "--no-outline" => s.show_outline = false,
                 "--normals" => s.show_normals = true,
@@ -125,6 +160,8 @@ impl CaptureOptions {
                 }
                 "--wire-overlay" => s.show_wire_overlay = true,
                 "--no-grid" => s.show_grid = false,
+                "--no-overlays" => s.show_overlays = false,
+                "--performance" => s.performance_mode = true,
                 "--fps" => {
                     s.show_fps = true;
                     s.vsync = false;
@@ -172,6 +209,22 @@ pub fn parse() -> Result<LaunchOptions, String> {
             "--select" => capture.select = value("--select")?.parse().ok(),
             "--clip" => capture.clip = value("--clip")?.parse().ok(),
             "--frame" => capture.frame = value("--frame")?.parse().ok(),
+            "--tool" => capture.tool = Some(value("--tool")?),
+            "--rotate" => {
+                let v: Vec<f32> = value("--rotate")?.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                let [x, y, z] = v[..] else { return Err("--rotate expects X,Y,Z degrees".into()) };
+                capture.rotate = Some([x, y, z]);
+            }
+            "--auto-orient" => capture.auto_orient = true,
+            "--lay" => {
+                let v = value("--lay")?;
+                let (x, y) = v.split_once(',').ok_or("--lay expects X,Y")?;
+                capture.lay_hover = Some([x.parse().map_err(|_| "bad --lay x")?, y.parse().map_err(|_| "bad --lay y")?]);
+            }
+            "--export-model" => {
+                capture.export_model = Some(PathBuf::from(value("--export-model")?));
+                capturing = true;
+            }
             "--export" => {
                 capture.export = Some(PathBuf::from(value("--export")?));
                 capturing = true;
@@ -189,7 +242,10 @@ pub fn parse() -> Result<LaunchOptions, String> {
                 capture.uv = true;
                 capture.uv_material = value("--uv-material")?.parse().ok();
             }
-            "--turntable" => capture.turntable = Some(PathBuf::from(value("--turntable")?)),
+            "--turntable" => {
+                capture.turntable = Some(PathBuf::from(value("--turntable")?));
+                capturing = true;
+            }
             "--section" => {
                 // x|y|z[,position 0..1][,flip]
                 let v = value("--section")?;
@@ -214,12 +270,12 @@ pub fn parse() -> Result<LaunchOptions, String> {
                 let (x, y) = v.split_once(',').ok_or("--click expects X,Y")?;
                 capture.click = Some([x.parse().map_err(|_| "bad --click x")?, y.parse().map_err(|_| "bad --click y")?]);
             }
-            "--shading" | "--lighting" | "--color" | "--matcap" | "--pass" | "--env" => {
+            "--shading" | "--lighting" | "--color" | "--matcap" | "--pass" | "--env" | "--workspace" | "--grain" | "--scratches" | "--material" => {
                 let v = value(&arg)?;
                 capture.settings.push((arg, Some(v)));
             }
-            "--xray" | "--no-xray" | "--wire-overlay" | "--no-grid" | "--fps" | "--env-bg" | "--sidebar"
-            | "--no-outline" | "--mesh-check" | "--normals" | "--face-orientation" | "--origins" => capture.settings.push((arg, None)),
+            "--xray" | "--no-xray" | "--studio" | "--no-shadows" | "--wire-overlay" | "--no-grid" | "--fps" | "--env-bg" | "--sidebar"
+            | "--file-materials" | "--no-overlays" | "--no-outline" | "--mesh-check" | "--normals" | "--face-orientation" | "--origins" | "--performance" => capture.settings.push((arg, None)),
             flag if flag.starts_with("--") => return Err(format!("unknown option {flag}")),
             _ => opts.open = Some(PathBuf::from(arg)),
         }

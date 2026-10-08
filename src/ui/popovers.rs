@@ -13,7 +13,8 @@ use super::{theme, widgets};
 use crate::loader::{self, EnvImage};
 use crate::render::{environment, matcap};
 use crate::settings::{
-    ColorMode, Environment, Lighting, Settings, ShadingMode, TexturePass, ViewTransform,
+    ColorMode, Environment, Lighting, MaterialGroup, MetalFinish, PartMaterial, Settings, ShadingMode, TexturePass,
+    ViewTransform,
 };
 
 const ENV_THUMB: [u32; 2] = [128, 64];
@@ -89,8 +90,33 @@ pub fn overlays(ui: &mut Ui, s: &mut Settings) {
         });
         ui.checkbox(&mut s.show_stats, tr("Statistics"));
         ui.checkbox(&mut s.show_gizmo, tr("Navigation gizmo"));
+        ui.checkbox(&mut s.show_bounds_overlay, tr("Bounding box"))
+            .on_hover_text(tr("Show model dimensions and bounding box axes"));
         ui.add_enabled_ui(s.shading != ShadingMode::Wireframe, |ui| {
             ui.checkbox(&mut s.show_wire_overlay, tr("Wireframe"));
+            if s.show_wire_overlay {
+                ui.indent("wire_opts", |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(tr("Color")).size(11.0).color(theme::TEXT_DIM));
+                        widgets::segmented(ui, &mut s.wire_color_mode, &[
+                            (crate::settings::WireColorMode::Theme, "Theme"),
+                            (crate::settings::WireColorMode::Random, "Random"),
+                            (crate::settings::WireColorMode::Custom, "Custom"),
+                        ]);
+                    });
+                    if s.wire_color_mode == crate::settings::WireColorMode::Custom {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(tr("Color picker")).size(11.0).color(theme::TEXT_DIM));
+                            ui.color_edit_button_srgb(&mut s.wire_color);
+                        });
+                    }
+                    ui.add(egui::Slider::new(&mut s.wire_opacity, 0.1..=1.0).text(tr("Opacity")));
+                });
+            }
+        });
+        ui.add_enabled_ui(s.shading == ShadingMode::Rendered, |ui| {
+            ui.checkbox(&mut s.show_light_gizmos, tr("Lights"))
+                .on_hover_text(tr("Light handles and their line to the model, in Rendered"));
         });
         ui.checkbox(&mut s.show_origins, tr("Origins"))
             .on_hover_text(tr("Each object's pivot as a dot, like Blender"));
@@ -126,11 +152,12 @@ pub fn overlays(ui: &mut Ui, s: &mut Settings) {
         .on_hover_text(tr("Redraws continuously and shows FPS in the status bar"));
 }
 
-pub fn shading(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails) -> Option<PopoverAction> {
+/// `manufacturing`: the Manufacturing workspace, which adds the print finish to Rendered.
+pub fn shading(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails, manufacturing: bool) -> Option<PopoverAction> {
     ui.set_min_width(270.0);
     let mut action = None;
     match s.shading {
-        ShadingMode::Solid => solid(ui, s, thumbs),
+        ShadingMode::Solid => solid(ui, s, thumbs, manufacturing),
         ShadingMode::Wireframe => {
             widgets::section(ui, "Wireframe Color");
             let mut random = s.color == ColorMode::Random;
@@ -142,8 +169,6 @@ pub fn shading(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails) -> Option
         }
         ShadingMode::Rendered => action = rendered(ui, s, thumbs),
     }
-    ui.add_space(4.0);
-    ui.separator();
     widgets::section(ui, "Options");
     let mut xray = s.xray();
     if ui.checkbox(&mut xray, tr("X-Ray")).changed() {
@@ -158,6 +183,95 @@ pub fn shading(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails) -> Option
     action
 }
 
+/// What a part is made of on screen (Manufacturing): one color and a material, or the file's own
+/// materials; then wear (grain, scratches) over either.
+pub fn part_material(ui: &mut Ui, s: &mut Settings) {
+    widgets::section(ui, "Part Material");
+    ui.horizontal(|ui| {
+        widgets::segmented(ui, &mut s.file_materials, &[(false, "One color"), (true, "File materials")]);
+    });
+    if s.file_materials {
+        ui.label(RichText::new(tr("The colors and materials stored in the file")).size(11.0).color(theme::TEXT_DIM));
+    } else {
+        ui.horizontal(|ui| {
+            ui.color_edit_button_srgb(&mut s.plastic_color);
+            hex_field(ui, &mut s.plastic_color);
+        });
+        ui.add_space(4.0);
+        let mut group = s.material.group();
+        ui.horizontal(|ui| {
+            let options: Vec<(MaterialGroup, &str)> = MaterialGroup::ALL.iter().map(|g| (*g, g.label())).collect();
+            if widgets::segmented(ui, &mut group, &options) {
+                s.material = group.first();
+                if s.material.layer_height() > 0.0 {
+                    s.layer_height = s.material.layer_height();
+                }
+            }
+        });
+        match group {
+            MaterialGroup::Fdm => {
+                ui.horizontal(|ui| {
+                    let options: Vec<(PartMaterial, &str)> = PartMaterial::FDM.iter().map(|m| (*m, m.label())).collect();
+                    widgets::segmented(ui, &mut s.material, &options);
+                });
+            }
+            MaterialGroup::Metal => {
+                ui.horizontal(|ui| {
+                    let options: Vec<(MetalFinish, &str)> = MetalFinish::ALL.iter().map(|f| (*f, f.label())).collect();
+                    widgets::segmented(ui, &mut s.metal_finish, &options);
+                });
+            }
+            _ => {}
+        }
+        ui.label(RichText::new(tr(s.material.description())).size(11.0).color(theme::TEXT_DIM));
+        if s.material.layer_height() > 0.0 {
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut s.layer_lines, tr("Layer lines"));
+                ui.add_enabled(s.layer_lines, egui::Slider::new(&mut s.layer_height, 0.02..=0.6).step_by(0.01).suffix(" mm"))
+                    .on_hover_text(tr("Layer lines run along Z: lay the part on a face to change the print direction"));
+            });
+        }
+        if s.shading != ShadingMode::Rendered {
+            ui.label(RichText::new(tr("Rendered mode shows the material; Solid only its color and relief.")).size(11.0).color(theme::TEXT_FAINT));
+        }
+    }
+    widgets::section(ui, "Surface Wear");
+    let percent = |v: &mut f32, label: &str, tip: &str, ui: &mut Ui| {
+        ui.add(egui::Slider::new(v, 0.0..=1.0)
+            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+            .custom_parser(|t| t.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0))
+            .text(tr(label)))
+            .on_hover_text(tr(tip));
+    };
+    percent(&mut s.grain, "Grain", "Fine relief, uneven gloss and dust, so the part looks less like a perfect CG surface", ui);
+    percent(&mut s.scratches, "Scratches", "Handling marks: on metal they catch the light, on plastic they whiten", ui);
+    ui.add(egui::Slider::new(&mut s.grain_size, 0.2..=5.0).logarithmic(true).custom_formatter(|v, _| format!("×{v:.1}")).text(tr("Pattern size")))
+        .on_hover_text(tr("Scale of the grain and scratch patterns"));
+}
+
+/// The color as #RRGGBB, editable.
+fn hex_field(ui: &mut Ui, rgb: &mut [u8; 3]) {
+    let id = ui.id().with("hex");
+    let current = format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]);
+    let mut text = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| current.clone());
+    let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(78.0).font(theme::mono(12.0)));
+    if r.changed() {
+        let hex = text.trim().trim_start_matches('#');
+        if hex.len() == 6 {
+            if let Ok(v) = u32::from_str_radix(hex, 16) {
+                *rgb = [(v >> 16) as u8, (v >> 8) as u8, v as u8];
+            }
+        }
+    }
+    // While typing, keep what was typed; otherwise follow the color picker.
+    if r.has_focus() {
+        ui.data_mut(|d| d.insert_temp(id, text));
+    } else {
+        ui.data_mut(|d| d.remove::<String>(id));
+    }
+    r.on_hover_text(tr("Hex color, like #D9D9D6"));
+}
+
 /// Checkbox with the marker color as a swatch after the label.
 pub fn marker_toggle(ui: &mut Ui, value: &mut bool, label: &str, color: Color32) -> egui::Response {
     ui.horizontal(|ui| {
@@ -169,7 +283,7 @@ pub fn marker_toggle(ui: &mut Ui, value: &mut bool, label: &str, color: Color32)
     .inner
 }
 
-fn solid(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails) {
+fn solid(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails, manufacturing: bool) {
     widgets::section(ui, "Lighting");
     ui.horizontal(|ui| {
         widgets::segmented(
@@ -191,15 +305,18 @@ fn solid(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails) {
             &[(ColorMode::Material, "Material"), (ColorMode::Single, "Single"), (ColorMode::Random, "Random")],
         )
     });
-    ui.horizontal(|ui| {
-        widgets::segmented(
-            ui,
-            &mut s.color,
-            &[(ColorMode::Texture, "Texture"), (ColorMode::Attribute, "Attribute")],
-        )
-    })
-    .response
-    .on_hover_text(tr("Texture: image maps and their passes · Attribute: vertex colors"));
+    // Image maps and vertex colors belong to 3D Art; Manufacturing has neither.
+    if !manufacturing {
+        ui.horizontal(|ui| {
+            widgets::segmented(
+                ui,
+                &mut s.color,
+                &[(ColorMode::Texture, "Texture"), (ColorMode::Attribute, "Attribute")],
+            )
+        })
+        .response
+        .on_hover_text(tr("Texture: image maps and their passes · Attribute: vertex colors"));
+    }
     match s.color {
         ColorMode::Single => {
             ui.horizontal(|ui| {
@@ -273,11 +390,41 @@ fn rendered(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails) -> Option<Po
     });
     ui.add(egui::Slider::new(&mut s.env_rotation, -180.0..=180.0).suffix("°").text(tr("Rotation")));
     ui.add(egui::Slider::new(&mut s.env_strength, 0.0..=4.0).text(tr("Strength")));
-    ui.checkbox(&mut s.env_background, tr("World background"));
-    ui.add_enabled_ui(s.env_background, |ui| {
-        ui.add(egui::Slider::new(&mut s.env_blur, 0.0..=1.0).text(tr("Blur")));
+    widgets::section(ui, "Background");
+    // Four choices over settings: Viewport, Studio, World, Transparent.
+    let mut backdrop = if s.transparent_background {
+        3
+    } else if s.env_background {
+        2
+    } else if s.studio_backdrop {
+        1
+    } else {
+        0
+    };
+    ui.horizontal(|ui| {
+        if widgets::segmented(
+            ui,
+            &mut backdrop,
+            &[(0, "Viewport"), (1, "Studio"), (2, "World"), (3, "Transparent")],
+        ) {
+            s.transparent_background = backdrop == 3;
+            s.studio_backdrop = backdrop == 1;
+            s.env_background = backdrop == 2;
+            if s.transparent_background {
+                s.export_transparent = true;
+            }
+        }
     });
-    ui.add_space(4.0);
+    if s.transparent_background {
+        ui.label(RichText::new(tr("Transparent background with checkerboard preview and alpha export")).size(11.0).color(theme::TEXT_DIM));
+    } else if s.env_background {
+        ui.add(egui::Slider::new(&mut s.env_blur, 0.0..=1.0).text(tr("Blur")));
+    } else if s.studio_backdrop {
+        ui.label(RichText::new(tr("Light gray sweep without the grid, for product shots")).size(11.0).color(theme::TEXT_DIM));
+    }
+
+    ui.label(RichText::new(tr("Lights & Shadows configured in Render tab")).size(11.0).color(theme::TEXT_DIM));
+
     widgets::section(ui, "Color Management");
     ui.horizontal(|ui| {
         widgets::segmented(
@@ -335,7 +482,7 @@ fn thumb_button(ui: &mut Ui, texture: egui::TextureId, size: Vec2, selected: boo
 fn matcap_picker(ui: &mut Ui, s: &mut Settings, thumbs: &mut Thumbnails) {
     if thumbs.matcaps.is_empty() {
         for (i, preset) in matcap::PRESETS.iter().enumerate() {
-            let pixels = matcap::generate(i);
+            let pixels = matcap::preview(i);
             let image = egui::ColorImage::from_rgba_unmultiplied([matcap::SIZE, matcap::SIZE], &pixels);
             thumbs
                 .matcaps

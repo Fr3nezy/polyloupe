@@ -1,0 +1,9 @@
+Surface wear maps in this folder are built from these ambientCG materials, released under
+CC0 1.0 Universal (public domain): https://ambientcg.com/ and
+https://creativecommons.org/publicdomain/zero/1.0/
+
+- grain.png: SurfaceImperfections020 (normal, roughness, opacity), by ambientCG.
+- scratches.png: Scratches002 (normal, opacity) and Scratches004 (opacity), by ambientCG.
+
+The maps were repacked by channel for PolyLoupe: grain = normal X, normal Y, roughness, dust;
+scratches = normal X, normal Y, scratch mask, brushed mask.
