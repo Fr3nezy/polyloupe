@@ -391,6 +391,9 @@ pub struct Settings {
 
     pub vsync: bool,
     pub show_fps: bool,
+    /// Graphics preset for low-end PCs: no MSAA, the viewport at 100% scale on high-DPI
+    /// screens, lighter shadow filtering. Exports keep full quality.
+    pub performance_mode: bool,
 
     pub language: Language,
     pub navigation: Navigation,
@@ -509,6 +512,7 @@ impl Default for Settings {
             show_stats: true,
             show_gizmo: true,
             vsync: true,
+            performance_mode: false,
             show_fps: false,
             language: Language::System,
             navigation: Navigation::Blender,

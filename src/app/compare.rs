@@ -173,14 +173,16 @@ impl ViewerApp {
         let normal_length = self.normal_length();
         let (grid_cell, grid_fade, grid_axis) = grid_params(&self.camera);
         let print_scale = self.print_scale();
+        let ppp = self.render_ppp(ui.ctx());
+        let performance = self.settings.performance_mode;
         let (Some(c), Some(rs)) = (&mut self.compare, frame.wgpu_render_state()) else { return };
+        c.renderer.set_performance(performance);
         let settings_b = c.settings_b(&effective);
         let scene = None;
         let target = match c.mode {
             CompareMode::SideBySide => Rect::from_min_max(pos2((rect.center().x + 1.0).round(), rect.min.y), rect.max),
             CompareMode::Split => rect,
         };
-        let ppp = ui.ctx().pixels_per_point();
         let size = [(target.width() * ppp).round().max(1.0) as u32, (target.height() * ppp).round().max(1.0) as u32];
         let input = FrameInput {
             view: self.camera.view_matrix(),

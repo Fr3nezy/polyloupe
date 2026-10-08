@@ -607,6 +607,8 @@ impl ViewerApp {
     /// or A and B across the Split divider with its gradient.
     fn render_offscreen(&mut self, size: [u32; 2], transparent: bool) -> Option<([u32; 2], Vec<u8>)> {
         let mut settings = self.settings.clone();
+        // Exports keep full quality (supersampling covers the missing MSAA).
+        settings.performance_mode = false;
         settings.show_grid = settings.show_overlays && settings.export_grid;
         settings.show_wire_overlay &= settings.show_overlays;
         settings.show_outline &= settings.show_overlays;
@@ -785,6 +787,14 @@ impl ViewerApp {
                 }
                 ui.add_space(6.0);
                 widgets::section(ui, "Viewport");
+                ui.horizontal(|ui| {
+                    ui.label(tr("Graphics"));
+                    widgets::segmented(ui, &mut s.performance_mode, &[(false, "Quality"), (true, "Performance")]);
+                })
+                .response
+                .on_hover_text(tr(
+                    "Performance: for integrated GPUs and older PCs. No anti-aliasing, the view at 100% scale on high-DPI screens, lighter shadows. Exported images keep full quality",
+                ));
                 ui.checkbox(&mut s.vsync, tr("V-Sync"))
                     .on_hover_text(tr("Off: frames aren't capped to the monitor refresh rate"));
                 ui.checkbox(&mut s.show_fps, tr("Frame rate"))
@@ -1519,6 +1529,7 @@ impl ViewerApp {
     /// `gizmo`: the pointer is on the Move tool's gizmo, so a click there doesn't select.
     fn navigate(&mut self, ui: &Ui, response: &egui::Response, viewport: Rect, gizmo: bool) {
         let ppp = ui.ctx().pixels_per_point();
+        let render_ppp = self.render_ppp(ui.ctx());
         let (mods, scroll, pinch, dt) =
             ui.input(|i| (i.modifiers, i.smooth_scroll_delta, i.zoom_delta(), i.stable_dt.min(0.05)));
         let nav = self.settings.navigation;
@@ -1593,7 +1604,7 @@ impl ViewerApp {
             }
         }
         let to_px = |pos: Pos2| {
-            let p = (pos - viewport.min) * ppp;
+            let p = (pos - viewport.min) * render_ppp;
             [p.x.max(0.0) as u32, p.y.max(0.0) as u32]
         };
         // Click to select or place a measurement point (not with Alt, which is navigation in
@@ -1706,6 +1717,13 @@ impl ViewerApp {
         }
     }
 
+    /// Viewport pixels per UI point. Performance mode renders high-DPI screens at 100% scale
+    /// and lets the GPU upscale the image.
+    pub(super) fn render_ppp(&self, ctx: &egui::Context) -> f32 {
+        let ppp = ctx.pixels_per_point();
+        if self.settings.performance_mode { ppp.min(1.0) } else { ppp }
+    }
+
     /// Settings as the renderer should see them: the overlays switch hides every overlay.
     fn effective_settings(&self) -> Settings {
         let mut effective = self.settings.clone();
@@ -1729,11 +1747,13 @@ impl ViewerApp {
         let effective = self.effective_settings();
         let print_scale = self.print_scale();
         let scene = self.scene_frame();
+        let ppp = self.render_ppp(ui.ctx());
+        let performance = self.settings.performance_mode;
         let (Some(renderer), Some(rs)) = (&mut self.renderer, frame.wgpu_render_state()) else {
             ui.painter().rect_filled(rect, 0.0, theme::VIEWPORT);
             return;
         };
-        let ppp = ui.ctx().pixels_per_point();
+        renderer.set_performance(performance);
         let size = [(rect.width() * ppp).round().max(1.0) as u32, (rect.height() * ppp).round().max(1.0) as u32];
         let aspect = size[0] as f32 / size[1] as f32;
 
@@ -1778,7 +1798,7 @@ impl ViewerApp {
 
         let hit = renderer.picked.take();
         let point = renderer.picked_point.take().flatten();
-        let radius = snap::RADIUS_PX * ui.ctx().pixels_per_point();
+        let radius = snap::RADIUS_PX * self.render_ppp(ui.ctx());
         match (pick.map(|p| p.1), hit) {
             (Some(PickPurpose::Select { extend }), Some(hit)) => {
                 self.selection.click(hit, extend);

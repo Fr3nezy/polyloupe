@@ -96,13 +96,16 @@ fn shadow_at(p: vec3<f32>, layer: i32, m: mat4x4<f32>, radius: f32, screen_pos: 
     let cos_phi = cos(phi);
     let sin_phi = sin(phi);
 
+    // 32 taps, or every fourth one in performance mode (still spread over the whole disk).
+    let taps = clamp(i32(g.display.z), 1, 32);
+    let step = 32 / taps;
     var sum = 0.0;
-    for (var i = 0; i < 32; i++) {
-        let s = VOGEL_SAMPLES[i];
+    for (var i = 0; i < taps; i++) {
+        let s = VOGEL_SAMPLES[i * step];
         let o = vec2<f32>(s.x * cos_phi - s.y * sin_phi, s.x * sin_phi + s.y * cos_phi) * texel;
         sum += textureSampleCompareLevel(shadow_tex, shadow_samp, uv + o, layer, c.z - 0.0015);
     }
-    return sum / 32.0;
+    return sum / f32(taps);
 }
 
 struct PbrOut {

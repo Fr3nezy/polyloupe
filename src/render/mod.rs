@@ -278,7 +278,8 @@ struct GpuImage {
 
 struct Targets {
     size: [u32; 2],
-    msaa: wgpu::TextureView,
+    /// Multisampled color buffer, resolved into `resolve_srgb`; none without MSAA.
+    msaa: Option<wgpu::TextureView>,
     depth: wgpu::TextureView,
     resolve_srgb: wgpu::TextureView,
     resolve_tex: wgpu::Texture,
@@ -346,6 +347,11 @@ pub struct Renderer {
     pick_buf: wgpu::Buffer,
     targets: Option<Targets>,
     texture_id: Option<egui::TextureId>,
+    /// MSAA samples per pixel: 4, or 1 in performance mode.
+    samples: u32,
+    /// Bilinear upscaling of the viewport texture, when it's rendered below screen resolution.
+    smooth: bool,
+    globals_bgl: wgpu::BindGroupLayout,
     meshes: Vec<GpuMesh>,
     objects: Vec<ObjectInfo>,
     zero_buf: Option<wgpu::Buffer>,
@@ -603,7 +609,7 @@ impl Renderer {
         let (object_buf, object_bg) = create_object_buffer(device, &object_bgl, 1, object_stride, &joints_buf);
 
         let t = std::time::Instant::now();
-        let pipes = create_pipelines(device, &globals_bgl, &object_bgl, &material_bgl, &outline_bgl);
+        let pipes = create_pipelines(device, &globals_bgl, &object_bgl, &material_bgl, &outline_bgl, SAMPLES);
         log::info!("pipelines created in {:?}", t.elapsed());
         let white = upload_image(device, queue, 1, 1, &[vec![255, 255, 255, 255]]);
         let flat_normal = upload_image(device, queue, 1, 1, &[vec![128, 128, 255, 255]]);
@@ -649,6 +655,9 @@ impl Renderer {
             pick_buf,
             targets: None,
             texture_id: None,
+            samples: SAMPLES,
+            smooth: false,
+            globals_bgl,
             picked_point: None,
             meshes: Vec::new(),
             objects: Vec::new(),
@@ -663,6 +672,24 @@ impl Renderer {
             last_frame: None,
             shadow_key: None,
             picked: None,
+        }
+    }
+
+    /// Performance mode: no MSAA (pipelines and targets are rebuilt once on a change), and a
+    /// smooth upscale since the viewport is then rendered below screen resolution.
+    pub fn set_performance(&mut self, on: bool) {
+        let samples = if on { 1 } else { SAMPLES };
+        if samples != self.samples {
+            self.samples = samples;
+            self.pipes = create_pipelines(&self.device, &self.globals_bgl, &self.object_bgl, &self.material_bgl, &self.outline_bgl, samples);
+            self.targets = None;
+            self.shadow_key = None;
+            self.dirty.set(true);
+        }
+        if on != self.smooth {
+            self.smooth = on;
+            self.targets = None;
+            self.dirty.set(true);
         }
     }
 
@@ -1081,8 +1108,8 @@ impl Renderer {
             })
         };
         let attach = wgpu::TextureUsages::RENDER_ATTACHMENT;
-        let msaa = make("msaa", COLOR_FORMAT, SAMPLES, attach, &[]);
-        let depth = make("depth", DEPTH_FORMAT, SAMPLES, attach, &[]);
+        let msaa = (self.samples > 1).then(|| make("msaa", COLOR_FORMAT, self.samples, attach, &[]));
+        let depth = make("depth", DEPTH_FORMAT, self.samples, attach, &[]);
         let resolve = make(
             "resolve",
             COLOR_FORMAT,
@@ -1104,26 +1131,27 @@ impl Renderer {
             format: Some(EGUI_VIEW_FORMAT),
             ..Default::default()
         });
+        let filter = if self.smooth { wgpu::FilterMode::Linear } else { wgpu::FilterMode::Nearest };
         if let Some(egui_renderer) = egui_renderer {
             match self.texture_id {
                 Some(id) => egui_renderer.update_egui_texture_from_wgpu_texture(
                     &self.device,
                     &resolve_egui,
-                    wgpu::FilterMode::Nearest,
+                    filter,
                     id,
                 ),
                 None => {
                     self.texture_id = Some(egui_renderer.register_native_texture(
                         &self.device,
                         &resolve_egui,
-                        wgpu::FilterMode::Nearest,
+                        filter,
                     ))
                 }
             }
         }
         self.targets = Some(Targets {
             size,
-            msaa: msaa.create_view(&Default::default()),
+            msaa: msaa.map(|t| t.create_view(&Default::default())),
             depth: depth.create_view(&Default::default()),
             resolve_srgb: resolve.create_view(&Default::default()),
             resolve_tex: resolve,
@@ -1361,7 +1389,13 @@ impl Renderer {
             markers: [s.show_non_manifold as u32, s.show_open_edges as u32, s.show_overlapping as u32, 0],
             section: input.section.unwrap_or([0.0; 4]),
             normals: [if s.show_normals { input.normal_length } else { 0.0 }, s.show_face_orientation as u32 as f32, 0.0, 0.0],
-            display: [(s.up_axis == crate::axes::UpAxis::Y) as u32 as f32, neutral as u32 as f32, 0.0, 0.0],
+            // z: shadow filter taps (performance mode samples a quarter of them).
+            display: [
+                (s.up_axis == crate::axes::UpAxis::Y) as u32 as f32,
+                neutral as u32 as f32,
+                if s.performance_mode { 8.0 } else { 32.0 },
+                0.0,
+            ],
             // The material only shows in Rendered; layer lines need a height.
             finish: if input.print_scale > 0.0 {
                 let id = if rendered && neutral { s.material.shader_id() } else { 0 };
@@ -1478,13 +1512,19 @@ impl Renderer {
             };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("viewport"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &targets.msaa,
-                    depth_slice: None,
-                    resolve_target: Some(&targets.resolve_srgb),
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(clear),
-                        store: wgpu::StoreOp::Discard,
+                // With MSAA the samples resolve into the image; without, it's drawn directly.
+                color_attachments: &[Some(match &targets.msaa {
+                    Some(msaa) => wgpu::RenderPassColorAttachment {
+                        view: msaa,
+                        depth_slice: None,
+                        resolve_target: Some(&targets.resolve_srgb),
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(clear), store: wgpu::StoreOp::Discard },
+                    },
+                    None => wgpu::RenderPassColorAttachment {
+                        view: &targets.resolve_srgb,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(clear), store: wgpu::StoreOp::Store },
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -1892,6 +1932,7 @@ fn create_pipelines(
     object_bgl: &wgpu::BindGroupLayout,
     material_bgl: &wgpu::BindGroupLayout,
     outline_bgl: &wgpu::BindGroupLayout,
+    samples: u32,
 ) -> Pipelines {
     let common = include_str!("shaders/common.wgsl");
     let module = |label, src: &str| {
@@ -2003,7 +2044,7 @@ fn create_pipelines(
             topology: Topo::TriangleList,
             depth: Some(depth),
             cull,
-            samples: SAMPLES,
+            samples,
             format: COLOR_FORMAT,
             blend,
             write_mask,
@@ -2021,7 +2062,7 @@ fn create_pipelines(
             topology: Topo::LineList,
             depth: Some((false, compare)),
             cull: None,
-            samples: SAMPLES,
+            samples,
             format: COLOR_FORMAT,
             blend: alpha,
             write_mask: all,
@@ -2049,7 +2090,7 @@ fn create_pipelines(
             topology: Topo::TriangleList,
             depth: Some((false, compare)),
             cull: None,
-            samples: SAMPLES,
+            samples,
             format: COLOR_FORMAT,
             blend: alpha,
             write_mask: all,
@@ -2074,7 +2115,7 @@ fn create_pipelines(
         topology: Topo::LineList,
         depth: Some((false, Cmp::GreaterEqual)),
         cull: None,
-        samples: SAMPLES,
+        samples,
         format: COLOR_FORMAT,
         blend: alpha,
         write_mask: all,
@@ -2104,7 +2145,7 @@ fn create_pipelines(
             topology: Topo::TriangleList,
             depth: Some((false, Cmp::Greater)),
             cull: None,
-            samples: SAMPLES,
+            samples,
             format: COLOR_FORMAT,
             blend: alpha,
             write_mask: all,
@@ -2120,7 +2161,7 @@ fn create_pipelines(
             topology: Topo::TriangleList,
             depth: Some((false, Cmp::Greater)),
             cull: None,
-            samples: SAMPLES,
+            samples,
             format: COLOR_FORMAT,
             blend: alpha,
             write_mask: all,
@@ -2136,7 +2177,7 @@ fn create_pipelines(
             topology: Topo::TriangleList,
             depth: Some((false, Cmp::Always)),
             cull: None,
-            samples: SAMPLES,
+            samples,
             format: COLOR_FORMAT,
             blend: None,
             write_mask: all,
